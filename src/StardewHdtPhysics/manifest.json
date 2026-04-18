@@ -1,0 +1,10 @@
+{
+  "Name": "Stardew HDT Physics",
+  "Author": "JosephsDeadish",
+  "Version": "0.1.0",
+  "Description": "Adds configurable body, hair, and knockback physics impulses for farmers and humanoid NPCs with sprite profile auto-detection.",
+  "UniqueID": "JosephsDeadish.StardewHdtPhysics",
+  "EntryDll": "StardewHdtPhysics.dll",
+  "MinimumApiVersion": "4.0.0",
+  "UpdateKeys": []
+}

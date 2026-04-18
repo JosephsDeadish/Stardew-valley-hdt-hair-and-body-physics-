@@ -1,0 +1,8 @@
+[
+  {
+    "CharacterName": "Krobus",
+    "SpriteTextureContains": "krobus",
+    "ProfileType": "Androgynous",
+    "ForceHumanoid": true
+  }
+]

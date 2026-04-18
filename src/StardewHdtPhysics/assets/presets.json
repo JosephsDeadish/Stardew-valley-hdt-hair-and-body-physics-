@@ -1,0 +1,38 @@
+[
+  {
+    "Name": "Soft",
+    "FemaleBreastStrength": 0.35,
+    "FemaleButtStrength": 0.3,
+    "FemaleThighStrength": 0.25,
+    "FemaleBellyStrength": 0.2,
+    "MaleButtStrength": 0.3,
+    "MaleGroinStrength": 0.3,
+    "MaleThighStrength": 0.25,
+    "MaleBellyStrength": 0.2,
+    "HairStrength": 0.35
+  },
+  {
+    "Name": "Default",
+    "FemaleBreastStrength": 0.55,
+    "FemaleButtStrength": 0.5,
+    "FemaleThighStrength": 0.4,
+    "FemaleBellyStrength": 0.3,
+    "MaleButtStrength": 0.45,
+    "MaleGroinStrength": 0.45,
+    "MaleThighStrength": 0.35,
+    "MaleBellyStrength": 0.25,
+    "HairStrength": 0.55
+  },
+  {
+    "Name": "High",
+    "FemaleBreastStrength": 0.85,
+    "FemaleButtStrength": 0.8,
+    "FemaleThighStrength": 0.65,
+    "FemaleBellyStrength": 0.45,
+    "MaleButtStrength": 0.75,
+    "MaleGroinStrength": 0.75,
+    "MaleThighStrength": 0.55,
+    "MaleBellyStrength": 0.4,
+    "HairStrength": 0.85
+  }
+]
