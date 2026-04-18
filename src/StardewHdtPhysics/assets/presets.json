@@ -9,7 +9,9 @@
     "MaleGroinStrength": 0.3,
     "MaleThighStrength": 0.25,
     "MaleBellyStrength": 0.2,
-    "HairStrength": 0.35
+    "HairStrength": 0.35,
+    "RagdollKnockbackStrength": 1.0,
+    "EnvironmentalPhysicsStrength": 0.3
   },
   {
     "Name": "Default",
@@ -21,7 +23,9 @@
     "MaleGroinStrength": 0.45,
     "MaleThighStrength": 0.35,
     "MaleBellyStrength": 0.25,
-    "HairStrength": 0.55
+    "HairStrength": 0.55,
+    "RagdollKnockbackStrength": 1.5,
+    "EnvironmentalPhysicsStrength": 0.5
   },
   {
     "Name": "High",
@@ -33,6 +37,8 @@
     "MaleGroinStrength": 0.75,
     "MaleThighStrength": 0.55,
     "MaleBellyStrength": 0.4,
-    "HairStrength": 0.85
+    "HairStrength": 0.85,
+    "RagdollKnockbackStrength": 2.5,
+    "EnvironmentalPhysicsStrength": 0.9
   }
 ]

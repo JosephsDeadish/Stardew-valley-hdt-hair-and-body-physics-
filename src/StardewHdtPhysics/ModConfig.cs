@@ -2,30 +2,50 @@ namespace StardewHdtPhysics;
 
 public sealed class ModConfig
 {
+    // ── System toggles ────────────────────────────────────────────────────────
     public bool EnableBodyPhysics { get; set; } = true;
     public bool EnableHairPhysics { get; set; } = true;
     public bool EnableRagdollKnockback { get; set; } = true;
     public bool EnableIdleMotion { get; set; } = true;
+    public bool EnableMonsterBodyPhysics { get; set; } = true;
+    public bool EnableMonsterRagdoll { get; set; } = true;
+    public bool EnableNpcSwordKnockdown { get; set; } = true;
+    public bool EnableEnvironmentalPhysics { get; set; } = true;
+    public bool EnableWindDetection { get; set; } = true;
 
+    // ── Feminine body strengths ───────────────────────────────────────────────
     public float FemaleBreastStrength { get; set; } = 0.55f;
     public float FemaleButtStrength { get; set; } = 0.5f;
     public float FemaleThighStrength { get; set; } = 0.4f;
     public float FemaleBellyStrength { get; set; } = 0.3f;
 
+    // ── Masculine body strengths ──────────────────────────────────────────────
     public float MaleButtStrength { get; set; } = 0.45f;
     public float MaleGroinStrength { get; set; } = 0.45f;
     public float MaleThighStrength { get; set; } = 0.35f;
     public float MaleBellyStrength { get; set; } = 0.25f;
 
+    // ── HDT Hair physics ──────────────────────────────────────────────────────
     public float HairStrength { get; set; } = 0.55f;
+    public float HairWindBoostOutdoors { get; set; } = 1.0f;
+    public float HairDampeningIndoors { get; set; } = 0.45f;
+
+    // ── Ragdoll & knockback ───────────────────────────────────────────────────
     public float RagdollChanceUnderLowHealth { get; set; } = 0.5f;
+    public float RagdollKnockbackStrength { get; set; } = 1.5f;
+    public float NpcSwordKnockdownChance { get; set; } = 0.4f;
+
+    // ── Environmental physics ─────────────────────────────────────────────────
+    public float EnvironmentalPhysicsStrength { get; set; } = 0.5f;
+
+    // ── Presets ───────────────────────────────────────────────────────────────
     public string Preset { get; set; } = "Default";
 
     /// <summary>
     /// Manual gender overrides keyed by NPC/farmer display name (case-insensitive).
     /// Accepted values: "Feminine", "Masculine", "Androgynous".
     /// Overrides take priority over all automatic sprite and gender detection.
-    /// Edit config.json directly or use the GMCM page.
+    /// Edit config.json directly or via the GMCM page instruction text.
     /// Example: { "Krobus": "Feminine", "Sam": "Feminine" }
     /// </summary>
     public Dictionary<string, string> GenderOverrides { get; set; } = new(StringComparer.OrdinalIgnoreCase);
