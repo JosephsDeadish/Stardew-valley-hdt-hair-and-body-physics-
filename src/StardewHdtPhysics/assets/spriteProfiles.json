@@ -11,6 +11,15 @@
   { "CharacterName": "",          "SpriteTextureContains": "furfur",       "ProfileType": "Feminine" },
   { "CharacterName": "",          "SpriteTextureContains": "anthro",       "ProfileType": "Androgynous" },
 
+  { "CharacterName": "",          "SpriteTextureContains": "beastgirl",    "ProfileType": "Feminine" },
+  { "CharacterName": "",          "SpriteTextureContains": "beast_girl",   "ProfileType": "Feminine" },
+  { "CharacterName": "",          "SpriteTextureContains": "slimegirl",    "ProfileType": "Feminine" },
+  { "CharacterName": "",          "SpriteTextureContains": "slime_girl",   "ProfileType": "Feminine" },
+  { "CharacterName": "",          "SpriteTextureContains": "funtarislime", "ProfileType": "Feminine" },
+  { "CharacterName": "",          "SpriteTextureContains": "funtari_slime","ProfileType": "Feminine" },
+  { "CharacterName": "",          "SpriteTextureContains": "monstergirl",  "ProfileType": "Feminine" },
+  { "CharacterName": "",          "SpriteTextureContains": "monster_girl", "ProfileType": "Feminine" },
+
   { "CharacterName": "Emily",     "SpriteTextureContains": "", "ProfileType": "Feminine" },
   { "CharacterName": "Haley",     "SpriteTextureContains": "", "ProfileType": "Feminine" },
   { "CharacterName": "Leah",      "SpriteTextureContains": "", "ProfileType": "Feminine" },

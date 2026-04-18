@@ -21,8 +21,13 @@ public sealed class ModEntry : Mod
     private Vector2 grassBendDisplacement = Vector2.Zero;
     private Vector2 grassBendVelocity = Vector2.Zero;
 
-    // ── Wind ─────────────────────────────────────────────────────────────────
+    // ── Wind / weather ────────────────────────────────────────────────────────
     private float currentWindStrength = 0f;
+    private float currentRainStrength = 0f;
+    private float currentSnowStrength = 0f;
+
+    // ── Optional mod integrations ─────────────────────────────────────────────
+    private bool fashionSenseLoaded = false;
 
     private ModConfig config = new();
     private SpriteProfileDetector detector = new(Array.Empty<SpriteProfile>());
@@ -33,6 +38,14 @@ public sealed class ModEntry : Mod
         this.config = helper.ReadConfig<ModConfig>();
         this.LoadData(helper);
         this.ApplyPresetIfMatched();
+
+        // Detect optional companion mods
+        this.fashionSenseLoaded = helper.ModRegistry.IsLoaded("Flashshifter.FashionSense");
+        if (this.fashionSenseLoaded)
+        {
+            this.Monitor.Log("Fashion Sense detected — custom hair physics will apply to all FS hairs.", LogLevel.Info);
+        }
+
         this.RegisterConfigMenu();
 
         helper.Events.GameLoop.UpdateTicked += this.OnUpdateTicked;
@@ -206,6 +219,8 @@ public sealed class ModEntry : Mod
         if (!this.config.EnableWindDetection)
         {
             this.currentWindStrength = 0f;
+            this.currentRainStrength = 0f;
+            this.currentSnowStrength = 0f;
             return;
         }
 
@@ -228,9 +243,12 @@ public sealed class ModEntry : Mod
             // Reflection unavailable — fall through to weather heuristics
         }
 
-        // Weather-based heuristics as a fallback / supplement
-        if (Game1.isRaining) wind = Math.Max(wind, 0.4f);
-        if (Game1.isLightning) wind = Math.Max(wind, 0.75f);
+        // Rain — strengthens wind component
+        this.currentRainStrength = Game1.isRaining ? (Game1.isLightning ? 0.85f : 0.5f) : 0f;
+        if (Game1.isRaining) wind = Math.Max(wind, this.currentRainStrength * 0.8f);
+
+        // Snow — separate gentle flutter channel; doesn't add to "wind" reading
+        this.currentSnowStrength = Game1.isSnowing ? 0.35f : 0f;
 
         // Season modifiers when there's no strong weather
         if (wind < 0.1f)
@@ -342,6 +360,8 @@ public sealed class ModEntry : Mod
     }
 
     // ── Hair physics ──────────────────────────────────────────────────────────
+    // Applied to ALL characters regardless of hair type.
+    // Works with vanilla hairs, mod-added hairs, and Fashion Sense custom hairs.
 
     private void SimulateHair(Character character, Vector2 velocity)
     {
@@ -357,13 +377,35 @@ public sealed class ModEntry : Mod
         }
 
         var windMult = this.GetHairWindMultiplier();
+        var isOutdoors = Game1.currentLocation?.IsOutdoors == true;
 
-        // Ambient wind drift when standing still outdoors
-        if (velocity.LengthSquared() < 0.0001f && Game1.currentLocation?.IsOutdoors == true)
+        // ── Rain effect ───────────────────────────────────────────────────────
+        // Rain makes hair heavier — pulls downward and slightly dampens lateral flow.
+        if (this.currentRainStrength > 0f && isOutdoors)
+        {
+            // Downward droop from wet weight
+            impulse += new Vector2(0f, this.currentRainStrength * 0.012f) * this.config.HairStrength;
+            // Wet hair resists lateral movement
+            windMult *= Math.Max(0.3f, 1f - this.currentRainStrength * 0.4f);
+        }
+
+        // ── Snow effect ───────────────────────────────────────────────────────
+        // Snow adds a gentle random upward flutter (light snowflakes catch in hair).
+        if (this.currentSnowStrength > 0f && isOutdoors)
+        {
+            var flutter = new Vector2(
+                (Game1.random.NextSingle() - 0.5f) * 0.007f,
+                -(Game1.random.NextSingle() * 0.005f)) * this.config.HairStrength * this.currentSnowStrength;
+            impulse += flutter;
+        }
+
+        // ── Ambient wind drift when standing still outdoors ───────────────────
+        if (velocity.LengthSquared() < 0.0001f && isOutdoors)
         {
             impulse += new Vector2(this.currentWindStrength * 0.008f, 0f) * this.config.HairStrength;
         }
 
+        // ── Movement-based flow ───────────────────────────────────────────────
         impulse += new Vector2(-velocity.X, -velocity.Y) * (0.02f * this.config.HairStrength * windMult);
         impulse *= 0.88f;
 
@@ -697,6 +739,10 @@ public sealed class ModEntry : Mod
 
         // ── HDT Hair physics ──────────────────────────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "HDT Hair Physics");
+        api.AddParagraph(this.ModManifest, () =>
+            "Hair physics apply to ALL hair types automatically: vanilla, mod-added, and Fashion Sense custom hairs. " +
+            "Rain makes hair heavier and droopy. Snow adds a light flutter. Wind causes flow and trailing. " +
+            (this.fashionSenseLoaded ? "Fashion Sense detected — FS hairs are included." : "Fashion Sense not detected (optional)."));
         api.AddNumberOption(this.ModManifest,
             () => this.config.HairStrength, v => this.config.HairStrength = v,
             () => "Hair strength",
