@@ -1,4 +1,5 @@
 using Microsoft.Xna.Framework;
+using System.Runtime.CompilerServices;
 using StardewModdingAPI;
 using StardewModdingAPI.Events;
 using StardewValley;
@@ -7,9 +8,9 @@ namespace StardewHdtPhysics;
 
 public sealed class ModEntry : Mod
 {
-    private readonly Dictionary<long, Vector2> lastPositions = new();
-    private readonly Dictionary<long, Vector2> bodyImpulse = new();
-    private readonly Dictionary<long, Vector2> hairImpulse = new();
+    private readonly Dictionary<int, Vector2> lastPositions = new();
+    private readonly Dictionary<int, Vector2> bodyImpulse = new();
+    private readonly Dictionary<int, Vector2> hairImpulse = new();
     private readonly List<PhysicsPreset> presets = new();
 
     private ModConfig config = new();
@@ -115,7 +116,7 @@ public sealed class ModEntry : Mod
 
         foreach (var character in this.EnumerateCharacters(Game1.currentLocation))
         {
-            var key = character.GetHashCode();
+            var key = this.GetCharacterKey(character);
             var current = character.Position;
             if (!this.lastPositions.TryGetValue(key, out var last))
             {
@@ -159,7 +160,7 @@ public sealed class ModEntry : Mod
             return;
         }
 
-        var key = character.GetHashCode();
+        var key = this.GetCharacterKey(character);
         if (!this.bodyImpulse.TryGetValue(key, out var impulse))
         {
             impulse = Vector2.Zero;
@@ -185,7 +186,7 @@ public sealed class ModEntry : Mod
             return;
         }
 
-        var key = character.GetHashCode();
+        var key = this.GetCharacterKey(character);
         if (!this.hairImpulse.TryGetValue(key, out var impulse))
         {
             impulse = Vector2.Zero;
@@ -215,7 +216,7 @@ public sealed class ModEntry : Mod
             return;
         }
 
-        var key = character.GetHashCode();
+        var key = this.GetCharacterKey(character);
         var impulse = this.bodyImpulse.TryGetValue(key, out var existing) ? existing : Vector2.Zero;
         var randomWave = new Vector2(
             Game1.random.NextSingle() - 0.5f,
@@ -241,6 +242,11 @@ public sealed class ModEntry : Mod
             return;
         }
 
+        if (velocity.LengthSquared() <= 0.0001f)
+        {
+            return;
+        }
+
         var nudge = Vector2.Normalize(velocity) * 1.5f;
         if (float.IsNaN(nudge.X) || float.IsNaN(nudge.Y))
         {
@@ -262,8 +268,13 @@ public sealed class ModEntry : Mod
             return;
         }
 
-        var key = Game1.player.GetHashCode();
+        var key = this.GetCharacterKey(Game1.player);
         this.bodyImpulse[key] = Vector2.Zero;
         this.hairImpulse[key] = Vector2.Zero;
+    }
+
+    private int GetCharacterKey(Character character)
+    {
+        return RuntimeHelpers.GetHashCode(character);
     }
 }

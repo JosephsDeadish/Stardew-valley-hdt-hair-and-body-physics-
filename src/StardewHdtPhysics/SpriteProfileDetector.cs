@@ -6,6 +6,7 @@ public sealed class SpriteProfileDetector
 {
     private readonly Dictionary<string, SpriteProfile> profilesByName;
     private readonly List<SpriteProfile> textureProfiles;
+    private readonly Dictionary<Type, (System.Reflection.PropertyInfo? Property, System.Reflection.FieldInfo? Field)> spriteTextureMembers = new();
 
     public SpriteProfileDetector(IEnumerable<SpriteProfile> profiles)
     {
@@ -62,13 +63,22 @@ public sealed class SpriteProfileDetector
             return string.Empty;
         }
 
-        var property = sprite.GetType().GetProperty("TextureName");
+        var spriteType = sprite.GetType();
+        if (!this.spriteTextureMembers.TryGetValue(spriteType, out var members))
+        {
+            members = (
+                spriteType.GetProperty("TextureName"),
+                spriteType.GetField("textureName"));
+            this.spriteTextureMembers[spriteType] = members;
+        }
+
+        var property = members.Property;
         if (property?.GetValue(sprite) is string textureNameFromProperty && !string.IsNullOrWhiteSpace(textureNameFromProperty))
         {
             return textureNameFromProperty;
         }
 
-        var field = sprite.GetType().GetField("textureName");
+        var field = members.Field;
         if (field?.GetValue(sprite) is string textureNameFromField && !string.IsNullOrWhiteSpace(textureNameFromField))
         {
             return textureNameFromField;
