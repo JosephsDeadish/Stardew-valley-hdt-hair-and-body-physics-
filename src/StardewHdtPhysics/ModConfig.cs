@@ -20,4 +20,13 @@ public sealed class ModConfig
     public float HairStrength { get; set; } = 0.55f;
     public float RagdollChanceUnderLowHealth { get; set; } = 0.5f;
     public string Preset { get; set; } = "Default";
+
+    /// <summary>
+    /// Manual gender overrides keyed by NPC/farmer display name (case-insensitive).
+    /// Accepted values: "Feminine", "Masculine", "Androgynous".
+    /// Overrides take priority over all automatic sprite and gender detection.
+    /// Edit config.json directly or use the GMCM page.
+    /// Example: { "Krobus": "Feminine", "Sam": "Feminine" }
+    /// </summary>
+    public Dictionary<string, string> GenderOverrides { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }

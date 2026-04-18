@@ -2,9 +2,19 @@
   "Name": "Stardew HDT Physics",
   "Author": "JosephsDeadish",
   "Version": "0.1.0",
-  "Description": "Adds configurable body, hair, and knockback physics impulses for farmers and humanoid NPCs with sprite profile auto-detection.",
+  "Description": "Zero-requirement plug-and-play physics mod: body jiggle, HDT hair, idle motion, and ragdoll-style knockback for farmers and humanoid NPCs. Optional GMCM support for in-game sliders and presets. Compatible with LewdEW, Valley Girls, XTardew, HornyFur, Anthro, and other sprite replacers.",
   "UniqueID": "JosephsDeadish.StardewHdtPhysics",
   "EntryDll": "StardewHdtPhysics.dll",
   "MinimumApiVersion": "4.0.0",
+  "Dependencies": [
+    {
+      "UniqueID": "spacechase0.GenericModConfigMenu",
+      "IsRequired": false
+    },
+    {
+      "UniqueID": "Pathoschild.ContentPatcher",
+      "IsRequired": false
+    }
+  ],
   "UpdateKeys": []
 }

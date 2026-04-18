@@ -8,6 +8,9 @@ public sealed class SpriteProfileDetector
     private readonly List<SpriteProfile> textureProfiles;
     private readonly Dictionary<Type, (System.Reflection.PropertyInfo? Property, System.Reflection.FieldInfo? Field)> spriteTextureMembers = new();
 
+    // Config-level manual overrides — highest priority.
+    private Dictionary<string, string> configOverrides = new(StringComparer.OrdinalIgnoreCase);
+
     public SpriteProfileDetector(IEnumerable<SpriteProfile> profiles)
     {
         var profileList = profiles.ToList();
@@ -19,8 +22,22 @@ public sealed class SpriteProfileDetector
             .ToList();
     }
 
+    /// <summary>Sets the manual gender overrides from config (reloaded on save-loaded).</summary>
+    public void SetConfigOverrides(Dictionary<string, string> overrides)
+    {
+        this.configOverrides = overrides ?? new(StringComparer.OrdinalIgnoreCase);
+    }
+
     public BodyProfileType Resolve(Character character)
     {
+        // 1. Manual config override — highest priority, lets players correct any detection error.
+        if (this.configOverrides.TryGetValue(character.Name, out var overrideValue)
+            && TryParseProfileType(overrideValue, out var overrideType))
+        {
+            return overrideType;
+        }
+
+        // 2. Live sprite texture detection — catches runtime sprite replacers.
         var spriteTextureName = this.TryGetSpriteTextureName(character);
         if (!string.IsNullOrWhiteSpace(spriteTextureName))
         {
@@ -32,11 +49,13 @@ public sealed class SpriteProfileDetector
             }
         }
 
+        // 3. Data-file profile by character name.
         if (this.profilesByName.TryGetValue(character.Name, out var explicitProfile))
         {
             return explicitProfile.ProfileType;
         }
 
+        // 4. SMAPI/game gender fallback.
         if (character is Farmer farmer)
         {
             return farmer.IsMale ? BodyProfileType.Masculine : BodyProfileType.Feminine;
@@ -53,6 +72,11 @@ public sealed class SpriteProfileDetector
         }
 
         return BodyProfileType.Androgynous;
+    }
+
+    private static bool TryParseProfileType(string value, out BodyProfileType result)
+    {
+        return Enum.TryParse(value, ignoreCase: true, out result);
     }
 
     private string TryGetSpriteTextureName(Character character)
