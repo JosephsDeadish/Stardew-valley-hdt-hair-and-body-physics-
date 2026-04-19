@@ -59,11 +59,21 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/stardew
-          key: stardew-valley-linux-${{ runner.os }}-v2
+          key: stardew-valley-linux-${{ runner.os }}-v3
 
       - name: Install DepotDownloader
         if: steps.cache-stardew.outputs.cache-hit != 'true'
-        run: dotnet tool install -g DepotDownloader --version 2.7.4
+        run: |
+          # DepotDownloader is NOT published as a .NET global tool on NuGet.
+          # Download the pre-built Linux binary directly from GitHub releases instead.
+          DD_VER="2.7.4"
+          DD_URL="https://github.com/SteamRE/DepotDownloader/releases/download/DepotDownloader_${DD_VER}/DepotDownloader-linux-x64.zip"
+          echo "Downloading DepotDownloader ${DD_VER} from GitHub releases..."
+          curl -sL "$DD_URL" -o /tmp/depotdownloader.zip
+          unzip -q /tmp/depotdownloader.zip -d /tmp/depotdownloader
+          chmod +x /tmp/depotdownloader/DepotDownloader
+          /tmp/depotdownloader/DepotDownloader --help 2>&1 | head -3 || true
+          echo "DepotDownloader installed."
 
       - name: Download Stardew Valley DLLs via DepotDownloader
         if: steps.cache-stardew.outputs.cache-hit != 'true'
@@ -78,9 +88,11 @@ jobs:
           # Only download *.dll files — that is all the compiler needs.
           printf 'regex:.*\\.dll$\n' > /tmp/stardew-filelist.txt
 
-          for attempt in 1 2 3; do
+          # Retry up to 5 times with exponential back-off.
+          # Steam CDN can be flaky; retrying usually hits a different mirror.
+          for attempt in 1 2 3 4 5; do
             echo "Attempt $attempt to download Stardew Valley DLLs..."
-            ~/.dotnet/tools/depotdownloader \
+            /tmp/depotdownloader/DepotDownloader \
               -app 413150 \
               -depot 413153 \
               -os linux \
@@ -89,11 +101,13 @@ jobs:
               -dir "$STARDEW_DIR" \
               -filelist /tmp/stardew-filelist.txt \
               && DOWNLOAD_SUCCESS=1 && break
-            [ $attempt -lt 3 ] && echo "Attempt $attempt failed, retrying in $((attempt * 10))s..." && sleep $((attempt * 10))
+            WAIT=$(( attempt * 15 ))
+            echo "Attempt $attempt failed. Waiting ${WAIT}s before retry..."
+            sleep "$WAIT"
           done
 
           if [ "${DOWNLOAD_SUCCESS:-}" != "1" ]; then
-            echo "ERROR: Failed to download Stardew Valley DLLs after 3 attempts"
+            echo "ERROR: Failed to download Stardew Valley DLLs after 5 attempts"
             exit 1
           fi
 
