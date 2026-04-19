@@ -82,6 +82,13 @@ public sealed class ModEntry : Mod
     /// Tile positions of trees present last tick — used to detect tree-fell events.
     private readonly HashSet<Point> prevTreeTiles = new();
 
+    // ── Resource clump destruction detection ──────────────────────────────────
+    /// Tile positions of resource clumps (boulders, stumps, logs, meteorites) present
+    /// last tick — used to detect when they are broken and spawn appropriate particles.
+    private readonly HashSet<Point> prevResourceClumpTiles = new();
+    /// Cached parentSheetIndex per tile so we know what material to spawn when a clump disappears.
+    private readonly Dictionary<Point, int> prevResourceClumpTypes = new();
+
     // ── Typed physics debris particles ────────────────────────────────────────
     /// Self-contained arcing debris particles: wood splinters, sawdust, stone chunks.
     /// No extra content required — rendered as coloured pixel quads via SpriteBatch.
@@ -506,6 +513,8 @@ public sealed class ModEntry : Mod
 
         // Clear tree tracking so we don't false-trigger tree-fell events on arrival at new location.
         this.prevTreeTiles.Clear();
+        this.prevResourceClumpTiles.Clear();
+        this.prevResourceClumpTypes.Clear();
 
         // Reset idle event scheduler on warp so events re-stagger from fresh offsets
         if (this.idleEventSchedulers.TryGetValue(playerKey, out var sched))
@@ -817,6 +826,7 @@ public sealed class ModEntry : Mod
         if (this.config.EnableTypedPhysicsDebris && e.IsMultipleOf(3))
         {
             this.TryDetectTreeFell(location);
+            this.TryDetectResourceClumpDestroyed(location);
         }
 
         // ── Belongings manager — auto-pickup and despawn tick (every 3rd tick)
@@ -1024,6 +1034,8 @@ public sealed class ModEntry : Mod
         this.typedParticles.Clear();
         this.itemWorld.Clear();
         this.prevTreeTiles.Clear();
+        this.prevResourceClumpTiles.Clear();
+        this.prevResourceClumpTypes.Clear();
         this.corpseAgeTicks.Clear();
         this.corpseLastPos.Clear();
         this.belongingsManager.Clear();
@@ -4545,7 +4557,12 @@ public sealed class ModEntry : Mod
             playerVelocity = Game1.player.Position - lastPos;
         }
 
-        foreach (var debris in location.debris)
+        if (location.debris is null) return;
+
+        // Take a snapshot to avoid InvalidOperationException if the game modifies
+        // the debris list (adds/removes items) while we iterate.
+        var debrisSnapshot = location.debris.ToArray();
+        foreach (var debris in debrisSnapshot)
         {
             if (debris?.Chunks is null || debris.Chunks.Count == 0)
             {
@@ -4634,7 +4651,11 @@ public sealed class ModEntry : Mod
             return;
         }
 
-        foreach (var debris in Game1.currentLocation.debris)
+        if (Game1.currentLocation.debris is null) return;
+
+        // Snapshot to prevent InvalidOperationException if the list is modified during iteration.
+        var debrisSnapshot = Game1.currentLocation.debris.ToArray();
+        foreach (var debris in debrisSnapshot)
         {
             if (debris?.Chunks is null || debris.Chunks.Count == 0)
             {
@@ -4998,7 +5019,114 @@ public sealed class ModEntry : Mod
     }
 
     /// <summary>
-    /// Render all live typed physics particles to the SpriteBatch as small coloured quads.
+    /// Detects when a resource clump (boulder, stump, log, meteorite) is destroyed and
+    /// spawns typed physics particles matching the material.
+    /// Uses the same change-detection pattern as <see cref="TryDetectTreeFell"/>.
+    /// </summary>
+    private void TryDetectResourceClumpDestroyed(GameLocation location)
+    {
+        if (location?.resourceClumps is null) return;
+
+        // Build the current set of clump tile positions.
+        var currentClumps = new HashSet<Point>();
+        foreach (var clump in location.resourceClumps)
+        {
+            if (clump is null) continue;
+            currentClumps.Add(new Point((int)clump.Tile.X, (int)clump.Tile.Y));
+        }
+
+        // Process removals: a tile that was present last tick but is absent now.
+        foreach (var tile in this.prevResourceClumpTiles)
+        {
+            if (currentClumps.Contains(tile)) continue;
+
+            // Find the matching clump from last tick (we only have position, not type here).
+            // Determine particle kind by re-checking the parent sheet index.
+            // Since the clump is gone, we infer type from a cached dictionary if we had one,
+            // but for simplicity we spawn both stone and wood particles scaled by tile type.
+            // We resolve the type by checking what the clump was when we last saw it.
+            var worldPos = new Vector2(tile.X * 64f + 32f, tile.Y * 64f + 32f);
+
+            // Look up cached type for this tile (populated in the update pass below).
+            if (!this.prevResourceClumpTypes.TryGetValue(tile, out var sheetIdx))
+                sheetIdx = -1;
+
+            bool isWood = sheetIdx == 600 || sheetIdx == 602 || sheetIdx == 46 || sheetIdx == 47;
+            bool isMeteor = sheetIdx == 672;
+
+            if (isWood)
+            {
+                // Stump/log break: wood splinters + sawdust
+                this.SpawnTypedDebris(worldPos, PhysicsParticleKind.WoodSplinter, 8 + Game1.random.Next(6), 2.0f);
+                this.SpawnTypedDebris(worldPos, PhysicsParticleKind.Sawdust,      10 + Game1.random.Next(6), 1.4f);
+
+                // A few persistent ItemPhysics log pieces
+                for (int ch = 0; ch < 3 + Game1.random.Next(3); ch++)
+                {
+                    var chAngle = Game1.random.NextSingle() * MathF.PI * 2f;
+                    var chSpd   = 1.2f + Game1.random.NextSingle() * 2.5f;
+                    this.itemWorld.Spawn(
+                        worldPos,
+                        new Vector2(MathF.Cos(chAngle) * chSpd, MathF.Sin(chAngle) * chSpd - 1.5f),
+                        ItemPhysicsMaterial.Wood,
+                        ItemPhysicsShape.Box,
+                        shapeRadius: 4f,
+                        visualSize:  3.5f + Game1.random.NextSingle() * 2f,
+                        maxAgeTicks: 900);
+                }
+            }
+            else if (isMeteor)
+            {
+                // Meteorite: stone chunks + ore flakes
+                this.SpawnTypedDebris(worldPos, PhysicsParticleKind.StoneChunk, 6 + Game1.random.Next(4), 2.2f);
+                this.SpawnTypedDebris(worldPos, PhysicsParticleKind.OreChunk,   4 + Game1.random.Next(4), 1.8f);
+
+                for (int ch = 0; ch < 2 + Game1.random.Next(3); ch++)
+                {
+                    var chAngle = Game1.random.NextSingle() * MathF.PI * 2f;
+                    var chSpd   = 1.5f + Game1.random.NextSingle() * 3.0f;
+                    this.itemWorld.Spawn(
+                        worldPos,
+                        new Vector2(MathF.Cos(chAngle) * chSpd, MathF.Sin(chAngle) * chSpd - 2.0f),
+                        ItemPhysicsMaterial.Ore,
+                        ItemPhysicsShape.Sphere,
+                        shapeRadius: 5f,
+                        visualSize:  4.0f + Game1.random.NextSingle() * 2.5f,
+                        maxAgeTicks: 1000);
+                }
+            }
+            else
+            {
+                // Default: stone boulder break (most resource clumps in mines / farm)
+                this.SpawnTypedDebris(worldPos, PhysicsParticleKind.StoneChunk, 7 + Game1.random.Next(5), 2.0f);
+
+                for (int ch = 0; ch < 2 + Game1.random.Next(3); ch++)
+                {
+                    var chAngle = Game1.random.NextSingle() * MathF.PI * 2f;
+                    var chSpd   = 1.2f + Game1.random.NextSingle() * 2.5f;
+                    this.itemWorld.Spawn(
+                        worldPos,
+                        new Vector2(MathF.Cos(chAngle) * chSpd, MathF.Sin(chAngle) * chSpd - 1.5f),
+                        ItemPhysicsMaterial.Stone,
+                        ItemPhysicsShape.Sphere,
+                        shapeRadius: 5f,
+                        visualSize:  3.5f + Game1.random.NextSingle() * 2f,
+                        maxAgeTicks: 900);
+                }
+            }
+        }
+
+        // Update previous-tick snapshot, recording tile → parentSheetIndex for type lookup.
+        this.prevResourceClumpTiles.Clear();
+        this.prevResourceClumpTypes.Clear();
+        foreach (var clump in location.resourceClumps)
+        {
+            if (clump is null) continue;
+            var pt = new Point((int)clump.Tile.X, (int)clump.Tile.Y);
+            this.prevResourceClumpTiles.Add(pt);
+            this.prevResourceClumpTypes[pt] = clump.parentSheetIndex.Value;
+        }
+    }
     /// Particles fade out over the final 25 % of their lifetime.
     /// The 1×1 white Texture2D is created lazily on first use so we don't depend on the
     /// graphics device being ready during Entry().
