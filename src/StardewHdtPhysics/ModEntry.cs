@@ -1601,25 +1601,19 @@ public sealed class ModEntry : Mod
 
                 if (this.config.EnableToolCollisionHitstop)
                 {
-                    // Swing-back: strong reverse impulse in facing direction (tool bounces back)
-                    var swingBackDir = Game1.player.FacingDirection switch
+                    // Use the HitContact resolver for proper stone/metal wall feedback
+                    var hitDir = Game1.player.FacingDirection switch
                     {
-                        0 => new Vector2(0f,  1f),   // facing up    → swing-back downward
-                        1 => new Vector2(-1f, 0f),   // facing right → swing-back left
-                        2 => new Vector2(0f, -1f),   // facing down  → swing-back upward
-                        3 => new Vector2(1f,  0f),   // facing left  → swing-back right
-                        _ => Vector2.Zero
+                        0 => new Vector2(0f, -1f),
+                        1 => new Vector2(1f,  0f),
+                        2 => new Vector2(0f,  1f),
+                        3 => new Vector2(-1f, 0f),
+                        _ => new Vector2(0f,  1f),
                     };
-
-                    var playerKey = this.GetCharacterKey(player);
-                    var existBody = this.bodyImpulse.TryGetValue(playerKey, out var pb) ? pb : Vector2.Zero;
-                    this.bodyImpulse[playerKey] = existBody + swingBackDir * 0.35f;
-
-                    // Extra hitstop frames on hard collision
-                    if (this.config.EnableHitstopEffect)
-                    {
-                        this.hitstopTicksRemaining = Math.Max(this.hitstopTicksRemaining, 5);
-                    }
+                    var wallMat = (tool is Pickaxe) ? HitMaterial.Stone : HitMaterial.Metal;
+                    var wallContact = HitContactResolver.ForWall(wallMat, hitDir, 0.80f);
+                    var wallProfile = HitContactResolver.Resolve(in wallContact);
+                    this.ApplyHitContactFeedback(player, null, in wallContact, wallProfile);
                 }
 
                 // Spawn typed stone/ore debris particles — material-matched to what was struck
@@ -1660,25 +1654,19 @@ public sealed class ModEntry : Mod
                 this.ApplyWoodShatterVfx(playerPos);
 
                 // Swing-stop: tool hits wood = brief hitstop (wood absorbs impact)
-                if (this.config.EnableToolCollisionHitstop && this.config.EnableHitstopEffect)
-                {
-                    this.hitstopTicksRemaining = Math.Max(this.hitstopTicksRemaining, 3);
-                }
-
-                // Reverse body impulse (tool bounces back slightly from wood impact)
                 if (this.config.EnableToolCollisionHitstop)
                 {
-                    var woodBackDir = Game1.player.FacingDirection switch
+                    var woodHitDir = Game1.player.FacingDirection switch
                     {
-                        0 => new Vector2(0f,  0.8f),
-                        1 => new Vector2(-0.8f, 0f),
-                        2 => new Vector2(0f, -0.8f),
-                        3 => new Vector2(0.8f, 0f),
-                        _ => Vector2.Zero
+                        0 => new Vector2(0f, -1f),
+                        1 => new Vector2(1f,  0f),
+                        2 => new Vector2(0f,  1f),
+                        3 => new Vector2(-1f, 0f),
+                        _ => new Vector2(0f,  1f),
                     };
-                    var pk    = this.GetCharacterKey(player);
-                    var existB = this.bodyImpulse.TryGetValue(pk, out var eb2) ? eb2 : Vector2.Zero;
-                    this.bodyImpulse[pk] = existB + woodBackDir * 0.22f;
+                    var woodContact = HitContactResolver.ForWood(woodHitDir, 0.60f, breaks: false);
+                    var woodProfile = HitContactResolver.Resolve(in woodContact);
+                    this.ApplyHitContactFeedback(player, null, in woodContact, woodProfile);
                 }
 
                 // Typed wood debris — splinters and sawdust that arc outward and scatter
@@ -2307,14 +2295,15 @@ public sealed class ModEntry : Mod
             this.hairImpulse[playerKey] = hairExisting + hitImpulse * (this.config.HairStrength * 0.7f);
         }
 
-        // Hitstop: brief physics freeze for impact feedback (~50 ms at 60 ticks/s)
+        // Hitstop via the HitContact resolver — player was hit by an enemy (flesh material)
         if (this.config.EnableHitstopEffect && damageFactor > 0.3f)
         {
-            this.hitstopTicksRemaining = Math.Clamp((int)(damageFactor * 4f), 1, 6);
-
-            // Visual hit flash: briefly lighten the screen to give impact feedback
-            // Game1.flashAlpha is a built-in Stardew screen-flash value (0 = none, 1 = full white)
-            Game1.flashAlpha = Math.Clamp(damageFactor * 0.35f, 0.1f, 0.55f);
+            var hurtContact = HitContactResolver.ForPlayerHurt(attackDir, damageFactor);
+            var hurtProfile = HitContactResolver.Resolve(in hurtContact);
+            // Use resolver freeze ticks; attacker recoil drives the existing bodyImpulse above.
+            if (this.config.EnableHitstopEffect)
+                this.hitstopTicksRemaining = Math.Max(this.hitstopTicksRemaining, hurtProfile.FreezeTicks);
+            Game1.flashAlpha = Math.Clamp(hurtProfile.FlashAlpha, 0f, 0.65f);
         }
     }
 
@@ -2741,10 +2730,12 @@ public sealed class ModEntry : Mod
             this.clothingImpulse[key] = ci + flinchImpulse * (this.config.ClothingFlowStrength * 1.2f);
         }
 
-        // Brief hitstop for the startle reaction
+        // Brief hitstop for the startle reaction — use HitContact resolver (flesh/torso)
         if (this.config.EnableHitstopEffect)
         {
-            this.hitstopTicksRemaining = Math.Max(this.hitstopTicksRemaining, 2);
+            var lightContact = HitContactResolver.ForPlayerHurt(flinchDir, 0.55f);
+            var lightProfile = HitContactResolver.Resolve(in lightContact);
+            this.hitstopTicksRemaining = Math.Max(this.hitstopTicksRemaining, lightProfile.FreezeTicks);
             Game1.flashAlpha = 0.45f; // white flash like actual lightning
         }
 
@@ -4640,6 +4631,78 @@ public sealed class ModEntry : Mod
     }
 
 
+
+    /// <summary>
+    /// Central feedback applicator — driven by a resolved <see cref="HitstopProfile"/>.
+    /// Applies: hitstop freeze, flash, attacker body recoil, target bone/hair impulse
+    /// (via <see cref="BoneImpulseRouter"/>), and typed debris particles.
+    ///
+    /// <paramref name="attacker"/>: the Farmer who struck (receives <c>AttackerRecoil</c>).
+    ///   Pass null if the attacker is the player's own body (e.g. when the player was hurt).
+    /// <paramref name="target"/>: the Character who was hit (receives <c>TargetBoneImpulse</c>).
+    ///   Pass null for inanimate objects (walls, trees) where there is no target body.
+    /// </summary>
+    private void ApplyHitContactFeedback(
+        Farmer?          attacker,
+        Character?       target,
+        in HitContact    contact,
+        HitstopProfile   profile)
+    {
+        // ── Freeze ────────────────────────────────────────────────────────────
+        if (this.config.EnableHitstopEffect && profile.FreezeTicks > 0)
+            this.hitstopTicksRemaining = Math.Max(this.hitstopTicksRemaining, profile.FreezeTicks);
+
+        // ── Screen flash ──────────────────────────────────────────────────────
+        if (profile.FlashAlpha > 0f)
+            Game1.flashAlpha = Math.Clamp(profile.FlashAlpha, 0f, 0.65f);
+
+        // ── Attacker recoil (body impulse to the striking farmer) ─────────────
+        if (attacker is not null && profile.AttackerRecoil.LengthSquared() > 0f)
+        {
+            var aKey  = this.GetCharacterKey(attacker);
+            var aBody = this.bodyImpulse.TryGetValue(aKey, out var aExist) ? aExist : Vector2.Zero;
+            this.bodyImpulse[aKey] = aBody + profile.AttackerRecoil;
+        }
+
+        // ── Target bone impulse via BoneImpulseRouter ─────────────────────────
+        if (target is not null && profile.TargetBoneImpulse.LengthSquared() > 0f)
+        {
+            var tKey   = this.GetCharacterKey(target);
+            var tBones = this.boneGroups.TryGetValue(tKey, out var bg) ? bg : null;
+            var tHair  = this.hairChains.TryGetValue(tKey, out var hc) ? hc : null;
+            var tWings = this.wingPairs.TryGetValue(tKey,  out var wp) ? wp : null;
+            var tTail  = this.tailChains.TryGetValue(tKey, out var tc) ? tc : null;
+            var tFur   = this.furChains.TryGetValue(tKey,  out var fc) ? fc : null;
+
+            BoneImpulseRouter.Route(
+                contact.Zone, profile.TargetBoneImpulse,
+                tBones, tHair, tWings, tTail, tFur);
+
+            // Also push existing per-character impulse dicts so clothing+body react
+            if (profile.TargetRecoil.LengthSquared() > 0f)
+            {
+                var existBody = this.bodyImpulse.TryGetValue(tKey, out var tBody) ? tBody : Vector2.Zero;
+                this.bodyImpulse[tKey] = existBody + profile.TargetRecoil;
+            }
+        }
+
+        // ── Target hair impulse ───────────────────────────────────────────────
+        if (target is not null && profile.TargetHairImpulse.LengthSquared() > 0f
+            && this.config.EnableHairPhysics)
+        {
+            var tKey   = this.GetCharacterKey(target);
+            var hExist = this.hairImpulse.TryGetValue(tKey, out var hv) ? hv : Vector2.Zero;
+            this.hairImpulse[tKey] = hExist + profile.TargetHairImpulse * this.config.HairStrength;
+        }
+
+        // ── Typed debris particles at hit position ────────────────────────────
+        if (profile.DebrisKind.HasValue && profile.DebrisCount > 0
+            && this.config.EnableTypedPhysicsDebris)
+        {
+            var hitPos = (target?.Position ?? attacker?.Position) ?? Vector2.Zero;
+            this.SpawnTypedDebris(hitPos, profile.DebrisKind.Value, profile.DebrisCount, profile.DebrisSpeed);
+        }
+    }
 
     /// <summary>
     /// Render all live <see cref="ItemPhysicsState"/> items from the <see cref="ItemPhysicsWorld"/>
