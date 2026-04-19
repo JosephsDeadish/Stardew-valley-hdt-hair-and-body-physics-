@@ -34,7 +34,59 @@ public enum MonsterPhysicsArchetype
     /// fast decay. Used for fire/water/earth/air/shadow elementals, magical constructs,
     /// Prismatic Slime variants, and spell-projected creatures from magic skill mods.
     /// </summary>
-    Elemental
+    Elemental,
+
+    // ── Additional archetypes for birds, beasts, insects, animals and pets ────
+
+    /// <summary>
+    /// Flying bird: periodic wing-flap burst, head-bob, wing chains react to hits.
+    /// Used for crow, hawk, raven, parrot, and bird-type monsters.
+    /// </summary>
+    Bird,
+
+    /// <summary>
+    /// Large heavy quadruped: Y-dominant mass-bounce, ground-rumble at speed,
+    /// fur and tail chains present but stiff.
+    /// Used for trolls, bears, golems, and large beast-type monsters.
+    /// </summary>
+    HeavyBeast,
+
+    /// <summary>
+    /// Ground-crawling insect: rapid decay, light random micro-jitter,
+    /// no appendage chains.
+    /// Used for beetles, spiders, ants, crabs, and any 6-8 legged crawler.
+    /// Also the recommended archetype for "Buggy Bugs" mod creatures.
+    /// </summary>
+    Insect,
+
+    /// <summary>
+    /// Large farm animal: cow, goat, sheep, bull.
+    /// Heavy belly mass, stiff ears, short tail, fur ripple on body hit.
+    /// Low exaggeration — these are domestic animals, not monsters.
+    /// </summary>
+    FarmAnimalHeavy,
+
+    /// <summary>
+    /// Small or lightweight farm animal: rabbit, chicken, duck, pig.
+    /// Pronounced hop-bounce, active ear/snout motion, short tail.
+    /// </summary>
+    FarmAnimalLight,
+
+    /// <summary>
+    /// Pet dog: floppy ears, wagging tail, medium recoil, petting-response ready.
+    /// </summary>
+    PetDog,
+
+    /// <summary>
+    /// Pet cat: twitchy ears, long sinuous tail, subtle body motion.
+    /// </summary>
+    PetCat,
+
+    /// <summary>
+    /// Fantasy familiar / magical companion: dragon-type familiar, fairy,
+    /// imp, spirit companion.  Wing chains, magical shimmer oscillation, tail chain.
+    /// </summary>
+    FantasyFamiliar,
 }
 
 /// <summary>

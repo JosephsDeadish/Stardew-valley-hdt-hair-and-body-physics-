@@ -63,17 +63,50 @@ public static class BoneImpulseRouter
         WingPair?     wings,
         TailChain?    tail,
         FurChain?     fur)
+        => Route(zone, force, bones, hair, wings, tail, fur, null);
+
+    /// <summary>
+    /// Route <paramref name="force"/> using species-specific follow-through multipliers
+    /// from a <see cref="CreaturePhysicsProfile"/>.  Follows the same zone→bone mapping as
+    /// the parameterless overload but scales appendage reactions by the profile's
+    /// <c>HitHairFollowMult</c>, <c>HitTailFollowMult</c>, <c>HitWingFollowMult</c>, and
+    /// <c>HitFurFollowMult</c> values.
+    /// </summary>
+    /// <param name="speciesProfile">
+    /// Optional species profile.  When <c>null</c> the global default constants are used,
+    /// making this method equivalent to the original <see cref="Route"/> overload.
+    /// </param>
+    public static void Route(
+        HitZone                zone,
+        Vector2                force,
+        BoneGroup?             bones,
+        HairChain?             hair,
+        WingPair?              wings,
+        TailChain?             tail,
+        FurChain?              fur,
+        CreaturePhysicsProfile? speciesProfile)
     {
         if (force.LengthSquared() < 0.0001f) return;
 
+        // Per-species follow-through fractions (fall back to global defaults when no profile)
+        var hairFollow = speciesProfile?.HitHairFollowMult ?? GlobalHairFollow;
+        var tailFollow = speciesProfile?.HitTailFollowMult ?? GlobalTailFollow;
+        var wingFollow = speciesProfile?.HitWingFollowMult ?? GlobalWingFollow;
+        var furFollow  = speciesProfile?.HitFurFollowMult  ?? GlobalBodyFollow;
+
+        // Scale body-bone force by species bone-impulse multiplier
+        var boneForce = speciesProfile is not null
+            ? force * speciesProfile.HitBoneImpulseMult
+            : force;
+
         // Apply zone-specific distribution to body bones
         if (bones is not null)
-            RouteBodyBones(zone, force, bones);
+            RouteBodyBones(zone, boneForce, bones);
 
-        // Apply global follow-through fractions to all connected systems
-        var hairForce = force * GlobalHairFollow;
-        var tailForce = force * GlobalTailFollow;
-        var wingForce = force * GlobalWingFollow;
+        // Apply follow-through fractions to all connected appendage systems
+        var hairForce = force * hairFollow;
+        var tailForce = force * tailFollow;
+        var wingForce = force * wingFollow;
 
         // Zone-specific overrides for appendage systems
         switch (zone)
@@ -82,29 +115,29 @@ public static class BoneImpulseRouter
             case HitZone.Torso:
             case HitZone.Belly:
                 // Torso/head hits have stronger hair follow-through
-                hairForce = force * 0.30f;
+                hairForce = force * Math.Max(hairFollow, 0.30f);
                 break;
 
             case HitZone.Tail:
                 // Direct tail hit — full force to tail chain
                 tailForce = force * 0.90f;
-                hairForce = force * 0.04f;
+                hairForce = force * Math.Min(hairFollow, 0.04f);
                 break;
 
             case HitZone.WingL:
                 wingForce = force * 0.90f;
-                hairForce = force * 0.03f;
+                hairForce = force * Math.Min(hairFollow, 0.03f);
                 break;
 
             case HitZone.WingR:
                 wingForce = force * 0.90f;
-                hairForce = force * 0.03f;
+                hairForce = force * Math.Min(hairFollow, 0.03f);
                 break;
 
             case HitZone.EarL:
             case HitZone.EarR:
             case HitZone.Snout:
-                hairForce = force * 0.20f;
+                hairForce = force * Math.Max(hairFollow, 0.20f);
                 break;
         }
 
@@ -119,7 +152,7 @@ public static class BoneImpulseRouter
             ApplyWingImpulse(wings, zone, wingForce);
 
         if (fur is not null)
-            ApplyFurImpulse(fur, force * GlobalBodyFollow);
+            ApplyFurImpulse(fur, force * furFollow);
     }
 
     // ── Body bone distribution ────────────────────────────────────────────────

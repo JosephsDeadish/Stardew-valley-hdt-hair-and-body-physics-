@@ -920,6 +920,12 @@ public sealed class ModEntry : Mod
         this.debrisWeightRules.AddRange(
             helper.Data.ReadJsonFile<List<DebrisWeightRule>>("assets/debrisPhysics.json")
             ?? new List<DebrisWeightRule>());
+
+        // Load creature-species profile overrides (mod-extensibility for custom creatures)
+        var speciesRules = helper.Data.ReadJsonFile<List<CreatureSpeciesRule>>("assets/creatureProfiles.json")
+                        ?? new List<CreatureSpeciesRule>();
+        CreaturePhysicsProfileLibrary.RegisterFromJson(speciesRules);
+
         this.detector = new SpriteProfileDetector(profiles);
         this.detector.SetConfigOverrides(this.config.GenderOverrides);
     }
@@ -2066,105 +2072,66 @@ public sealed class ModEntry : Mod
             impulse = Vector2.Zero;
         }
 
-        var strength = this.config.MonsterArchetypeStrength;
+        var strength  = this.config.MonsterArchetypeStrength;
         var archetype = this.DetectMonsterArchetype(monster);
 
-        float decay;
-        switch (archetype)
+        // ── Look up species profile (name overrides take priority over archetype) ──
+        var speciesProfile = CreaturePhysicsProfileLibrary.FindByName(monster.Name ?? string.Empty)
+                          ?? CreaturePhysicsProfileLibrary.Get(archetype);
+
+        // Dragon uses an extra strength multiplier from config
+        var effectiveStrength = archetype == MonsterPhysicsArchetype.Dragon
+            ? strength * this.config.DragonPhysicsStrength
+            : strength;
+
+        // ── Profile-driven impulse formula (replaces the old per-archetype switch) ──
+        // Velocity → counter-impulse (inertia feel)
+        impulse += new Vector2(
+            -velocity.X * speciesProfile.VelocityImpulseX,
+            -velocity.Y * speciesProfile.VelocityImpulseY) * effectiveStrength;
+
+        // Per-tick random micro-noise (wobble, vibration)
+        if (speciesProfile.RandomNoiseX > 0f || speciesProfile.RandomNoiseY > 0f)
         {
-            case MonsterPhysicsArchetype.Slime:
-                // Bouncy jello: high impulse, very slow decay, random wobble in all directions
-                impulse += new Vector2(-velocity.X, -velocity.Y) * (0.06f * strength);
-                impulse += new Vector2(
-                    (Game1.random.NextSingle() - 0.5f) * 0.018f,
-                    (Game1.random.NextSingle() - 0.5f) * 0.018f) * strength;
-                decay = 0.92f;
-                break;
-
-            case MonsterPhysicsArchetype.Bat:
-                // Floppy wings: fast lateral flutter, quick snap-back
-                impulse += new Vector2(-velocity.X * 0.08f, velocity.Y * 0.025f) * strength;
-                impulse += new Vector2(
-                    (Game1.random.NextSingle() - 0.5f) * 0.012f, 0f) * strength;
-                decay = 0.80f;
-                break;
-
-            case MonsterPhysicsArchetype.Worm:
-                // Squishy stretch: Y-axis dominant (compression/extension like a worm)
-                impulse += new Vector2(-velocity.X * 0.025f, -velocity.Y * 0.07f) * strength;
-                decay = 0.84f;
-                break;
-
-            case MonsterPhysicsArchetype.FlyingBug:
-                // Wing/thorax/leg vibration: light rapid micro-oscillation
-                impulse += new Vector2(-velocity.X, -velocity.Y) * (0.04f * strength);
-                impulse += new Vector2(
-                    (Game1.random.NextSingle() - 0.5f) * 0.015f,
-                    (Game1.random.NextSingle() - 0.5f) * 0.01f) * strength;
-                decay = 0.78f;
-                break;
-
-            case MonsterPhysicsArchetype.Furry:
-                // Fur ripple: gentle surface wave, slow natural decay
-                impulse += new Vector2(-velocity.X, -velocity.Y) * (0.03f * strength);
-                decay = 0.90f;
-                break;
-
-            case MonsterPhysicsArchetype.Skeleton:
-                // Bone clatter: sharp snappy physics, very fast decay
-                impulse += new Vector2(-velocity.X, -velocity.Y) * (0.07f * strength);
-                decay = 0.72f;
-                break;
-
-            case MonsterPhysicsArchetype.Dragon:
-                // Dragon physics: wingbeat burst + tail thrash lateral oscillation + ground rumble
-                // Uses DragonPhysicsStrength (default 1.2) to scale up from MonsterArchetypeStrength
-                {
-                    var dragonStrength = strength * this.config.DragonPhysicsStrength;
-                    impulse += new Vector2(-velocity.X, -velocity.Y) * (0.12f * dragonStrength);
-
-                    // Wingbeat rhythm: strong downward burst every ~25 ticks
-                    var key2 = this.GetCharacterKey(monster);
-                    if (Game1.ticks % 25 == key2 % 25)
-                    {
-                        impulse += new Vector2(
-                            (Game1.random.NextSingle() - 0.5f) * 0.09f,
-                            0.12f) * dragonStrength; // powerful downward wing-thrust
-                    }
-
-                    // Tail thrash: sinusoidal lateral oscillation regardless of movement
-                    impulse += new Vector2(
-                        (float)Math.Sin(Game1.ticks * 0.15f) * 0.03f * dragonStrength,
-                        (Game1.random.NextSingle() - 0.5f) * 0.01f * dragonStrength);
-
-                    // Ground rumble when moving fast — whole body vibrates
-                    if (velocity.LengthSquared() > 2f)
-                    {
-                        impulse += new Vector2(
-                            (Game1.random.NextSingle() - 0.5f) * 0.05f,
-                            (Game1.random.NextSingle() - 0.5f) * 0.05f) * dragonStrength;
-                    }
-
-                    decay = 0.95f; // very slow decay = long lingering motion
-                }
-                break;
-
-            case MonsterPhysicsArchetype.Elemental:
-                // Elemental magic fluctuation: sinusoidal pulsing, rapid oscillation
-                impulse += new Vector2(-velocity.X, -velocity.Y) * (0.05f * strength);
-                impulse += new Vector2(
-                    (float)Math.Sin(Game1.ticks * 0.30f) * 0.022f * strength,
-                    (float)Math.Cos(Game1.ticks * 0.25f) * 0.022f * strength);
-                decay = 0.82f;
-                break;
-
-            default: // Generic
-                impulse += new Vector2(-velocity.X, -velocity.Y) * (0.04f * strength);
-                decay = 0.86f;
-                break;
+            impulse += new Vector2(
+                (Game1.random.NextSingle() - 0.5f) * speciesProfile.RandomNoiseX,
+                (Game1.random.NextSingle() - 0.5f) * speciesProfile.RandomNoiseY) * effectiveStrength;
         }
 
-        // Dragon ragdoll: check separately — amplified extra-force knockdown on big movement spikes
+        // Periodic burst impulse (wingbeat, flap, stomp)
+        if (speciesProfile.PeriodicPeriod > 0
+            && Game1.ticks % speciesProfile.PeriodicPeriod == key % speciesProfile.PeriodicPeriod)
+        {
+            impulse += new Vector2(
+                (Game1.random.NextSingle() - 0.5f) * speciesProfile.PeriodicImpulseX,
+                speciesProfile.PeriodicImpulseY) * effectiveStrength;
+        }
+
+        // Sinusoidal oscillation (tail thrash, worm wriggle, elemental shimmer)
+        if (speciesProfile.SinusoidalXAmp > 0f)
+        {
+            impulse.X += (float)Math.Sin(Game1.ticks * speciesProfile.SinusoidalXFreq)
+                       * speciesProfile.SinusoidalXAmp * effectiveStrength;
+        }
+
+        if (speciesProfile.SinusoidalYAmp > 0f)
+        {
+            impulse.Y += (float)Math.Cos(Game1.ticks * speciesProfile.SinusoidalYFreq)
+                       * speciesProfile.SinusoidalYAmp * effectiveStrength;
+        }
+
+        // High-speed extra noise (ground rumble when sprinting)
+        if (speciesProfile.VelocityThresholdSq > 0f
+            && velocity.LengthSquared() > speciesProfile.VelocityThresholdSq)
+        {
+            impulse += new Vector2(
+                (Game1.random.NextSingle() - 0.5f) * speciesProfile.ThresholdNoiseX,
+                (Game1.random.NextSingle() - 0.5f) * speciesProfile.ThresholdNoiseY) * effectiveStrength;
+        }
+
+        var decay = speciesProfile.DecayRate;
+
+        // Dragon ragdoll: additional amplified knockdown on large movement spikes
         if (archetype == MonsterPhysicsArchetype.Dragon && this.config.EnableDragonPhysics)
         {
             this.SimulateDragonRagdoll(monster, velocity);
@@ -2185,6 +2152,12 @@ public sealed class ModEntry : Mod
     private MonsterPhysicsArchetype DetectMonsterArchetype(NPC monster)
     {
         var name = monster.Name ?? string.Empty;
+
+        // Check creatureProfiles.json name-overrides first (they may carry a full archetype)
+        var nameProfile = CreaturePhysicsProfileLibrary.FindByName(name);
+        if (nameProfile is not null)
+            return nameProfile.Archetype;
+
         foreach (var rule in this.monsterArchetypeRules)
         {
             if (!string.IsNullOrEmpty(rule.NameContains)
@@ -2967,7 +2940,10 @@ public sealed class ModEntry : Mod
             var hi = this.hairImpulse.TryGetValue(key, out var hExist) ? hExist : Vector2.Zero;
             this.hairImpulse[key] = hi + castDir * (this.config.HairStrength * 0.8f);
         }
-    } Heavy animals (cow, goat, sheep, pig, ostrich) get lower
+    }
+
+    /// <summary>
+    /// Simulate one farm-animal body-physics tick.  Heavy animals (cow, goat, sheep, pig, ostrich) get lower
     /// impulse and slower decay. Light animals (chicken, duck, rabbit) are bouncier.
     /// Compatible with all vanilla animals and any mod-added animals in Farm/AnimalHouse.
     /// </summary>
