@@ -55,20 +55,24 @@ public sealed class SpriteProfileDetector
             return explicitProfile.ProfileType;
         }
 
-        // 4. SMAPI/game gender fallback.
+        // 4. SMAPI/game gender fallback — version-safe for Stardew 1.5.6 (int) and 1.6 (enum).
         if (character is Farmer farmer)
         {
             return farmer.IsMale ? BodyProfileType.Masculine : BodyProfileType.Feminine;
         }
 
-        if (character.Gender == 1)
+        // Use Convert.ToInt32 so this compiles and runs correctly on both:
+        //   Stardew 1.5.6 where NPC.Gender is an int (0 = male, 1 = female)
+        //   Stardew 1.6.x where NPC.Gender is a Gender enum (0 = male, 1 = female)
+        try
         {
-            return BodyProfileType.Feminine;
+            var genderInt = Convert.ToInt32(character.Gender);
+            if (genderInt == 1) return BodyProfileType.Feminine;
+            if (genderInt == 0) return BodyProfileType.Masculine;
         }
-
-        if (character.Gender == 0)
+        catch
         {
-            return BodyProfileType.Masculine;
+            // Fallback: any conversion failure → androgynous
         }
 
         return BodyProfileType.Androgynous;

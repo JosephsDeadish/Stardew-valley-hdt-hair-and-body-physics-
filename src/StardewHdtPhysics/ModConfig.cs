@@ -51,6 +51,34 @@ public sealed class ModConfig
     /// <summary>Brief body/hair flinch when lightning strikes outdoors.</summary>
     public bool EnableLightningFlinch { get; set; } = true;
 
+    // ── Combat hit VFX ────────────────────────────────────────────────────────
+    /// <summary>
+    /// Blood particle spray when a weapon or tool hits a humanoid, monster, or farm animal.
+    /// Uses Game1 radial debris to spawn red particles at the hit position.
+    /// Toggle this off for a cleaner or less violent experience.
+    /// </summary>
+    public bool EnableBloodSplatterEffects { get; set; } = true;
+    /// <summary>
+    /// Spark particle burst when a weapon or pickaxe hits stone, metal, ore, geodes, or armored monsters.
+    /// Scales with tool weight: pickaxe produces the most sparks, sword produces fewer.
+    /// </summary>
+    public bool EnableSparkEffects { get; set; } = true;
+    /// <summary>
+    /// Green slime spray VFX + extra body jiggle impulse when a weapon hits a slime-type monster.
+    /// Uses colored radial debris to simulate slime splatter at the impact point.
+    /// </summary>
+    public bool EnableSlimeSprayEffects { get; set; } = true;
+    /// <summary>
+    /// When a weapon or pickaxe hits a hard surface (stone wall, metal furniture, rock object),
+    /// applies a reverse swing-back impulse to the player body + additional hitstop frames.
+    /// Simulates the tool bouncing back off a hard material.
+    /// </summary>
+    public bool EnableToolCollisionHitstop { get; set; } = true;
+    /// <summary>
+    /// Overall intensity multiplier for blood splatter particles. 0 = off, 1 = default, 2 = dramatic.
+    /// </summary>
+    public float BloodSplatterIntensity { get; set; } = 1.0f;
+
     // ── Feminine body strengths ───────────────────────────────────────────────
     public float FemaleBreastStrength { get; set; } = 0.75f;
     public float FemaleButtStrength { get; set; } = 0.5f;

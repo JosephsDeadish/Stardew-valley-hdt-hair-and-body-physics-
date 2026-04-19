@@ -1,4 +1,4 @@
-SVP Collisions, Physics, and Hit Stops  v0.3.0
+SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More  v0.4.0
 by JosephsDeadish
 ======================================================
 
@@ -11,12 +11,13 @@ HOW TO INSTALL
 --------------
 
 OPTION A — Drag and Drop (simplest)
-  1. This folder ("SVP Collisions, Physics, and Hit Stops") must contain:
+  1. This folder ("SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More")
+     must contain:
        manifest.json
        StardewHdtPhysics.dll
        assets/
-  2. If StardewHdtPhysics.dll is missing, you need to build the source
-     (see the GitHub repo) or download a release build from Nexus Mods.
+  2. If StardewHdtPhysics.dll is missing, download a release build from
+     Nexus Mods or build from source using the included build scripts.
   3. Copy the entire folder into:
        Windows:  C:\Program Files (x86)\Steam\steamapps\common\Stardew Valley\Mods\
        macOS:    ~/Library/Application Support/Steam/steamapps/common/Stardew Valley/Mods/
@@ -30,7 +31,7 @@ OPTION B — Stardrop Mod Manager
 
 OPTION C — Mod Organizer 2 (MO2)
   1. Press Ctrl+M in MO2 and select the .zip.
-  2. In the mod setup dialog, confirm the "SVP Collisions, Physics, and Hit Stops"
+  2. Confirm the "SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More"
      folder maps to Mods\ (MO2 auto-detects SMAPI mod structure).
   3. Activate the mod in the left panel and launch via MO2.
 
@@ -41,6 +42,12 @@ Edit it to adjust physics strengths, or use Generic Mod Config Menu
 for an in-game slider interface.
 
 Preset options: "Soft" | "Default" | "High" | "ExtraBouncy"
+
+Key toggles in config.json:
+  EnableBloodSplatterEffects  — blood particles when hitting humanoids/monsters (default: true)
+  EnableSparkEffects          — sparks when hitting stone/metal/hard surfaces (default: true)
+  EnableSlimeSprayEffects     — slime spray VFX + extra jiggle when hitting slimes (default: true)
+  EnableToolCollisionHitstop  — weapon swing-back + hitstop on hard surface collision (default: true)
 
 UNINSTALL
 ---------

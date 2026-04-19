@@ -1,6 +1,6 @@
-# SVP Collisions, Physics, and Hit Stops
+# SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More
 
-> **v0.3.0 — Zero hard requirements — plug and play.**  
+> **v0.4.0 — Zero hard requirements — plug and play.**  
 > Drop the mod folder into `Stardew Valley/Mods/` and launch via SMAPI.  
 > All options are in `config.json`, or use the optional in-game menu with  
 > [Generic Mod Config Menu (GMCM)](https://www.nexusmods.com/stardewvalley/mods/5098).
@@ -32,14 +32,14 @@ Stardrop automatically handles SMAPI and places the mod in the correct folder.
 
 1. Press **Ctrl+M** (Install Mod) and select the `.zip`.
 2. In the file-mapping dialog MO2 shows a tree; confirm  
-   `SVP Collisions, Physics, and Hit Stops\` maps to `Mods\`.
+   `SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More\` maps to `Mods\`.
 3. Activate the mod in the left panel and launch Stardew Valley through MO2.
 
 ### Option C — Manual drag-and-drop
 
 1. Extract the `.zip`.
 2. You will see a folder named exactly:  
-   **`SVP Collisions, Physics, and Hit Stops`**
+   **`SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More`**
 3. Copy that **entire folder** (not just its contents) into your Mods directory:
 
    | Platform | Mods directory |
@@ -54,7 +54,7 @@ Stardrop automatically handles SMAPI and places the mod in the correct folder.
    ```
    Stardew Valley/
    └── Mods/
-       └── SVP Collisions, Physics, and Hit Stops/
+       └── SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/
            ├── manifest.json           ← SMAPI reads this
            ├── StardewHdtPhysics.dll
            └── assets/
@@ -155,7 +155,7 @@ intensity beyond vanilla weather levels:
 ```powershell
 # Windows
 .\build-package.ps1
-# ↑ auto-detects Steam install, builds, copies DLL, creates dist\SVP Collisions, Physics, and Hit Stops.zip
+# ↑ auto-detects Steam install, builds, copies DLL, creates dist\SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More.zip
 ```
 
 ```bash
@@ -167,7 +167,7 @@ intensity beyond vanilla weather levels:
 Both scripts:
 1. Find your Stardew Valley installation (or accept `--game-path` / `-GamePath`)
 2. Build `src/StardewHdtPhysics/StardewHdtPhysics.csproj` with `dotnet build`
-3. Copy the DLL into `mod/SVP Collisions, Physics, and Hit Stops/`
+3. Copy the DLL into `mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/`
 4. Create a ready-to-install zip in `dist/`
 
 **Requirements for building:**
@@ -181,7 +181,7 @@ Both scripts:
 ```
 Repository
 ├── mod/
-│   └── SVP Collisions, Physics, and Hit Stops/    ← drag this folder into Mods/
+│   └── SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/    ← drag this folder into Mods/
 │       ├── manifest.json
 │       ├── StardewHdtPhysics.dll                  ← added by build-package script
 │       ├── README.txt
@@ -212,7 +212,7 @@ Repository
 
 ## Configuration
 
-Edit `Mods/SVP Collisions, Physics, and Hit Stops/config.json` after the first launch:
+Edit `Mods/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/config.json` after the first launch:
 
 ```jsonc
 {

@@ -11,7 +11,7 @@
       build locally with a valid GamePath.  Spaces and commas are safe on all platforms.
     -->
     <AssemblyName>StardewHdtPhysics</AssemblyName>
-    <ModFolderName>SVP Collisions, Physics, and Hit Stops</ModFolderName>
+    <ModFolderName>SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More</ModFolderName>
 
     <!--
       Silence the "GamePath not found" warning when building in CI or without the game

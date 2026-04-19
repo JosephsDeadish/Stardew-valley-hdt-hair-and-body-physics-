@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-    Build SVP Collisions, Physics, and Hit Stops and package it as an installable zip.
+    Build SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More and package it as an installable zip.
 
 .DESCRIPTION
     1. Finds Stardew Valley (or you pass -GamePath).
     2. Builds the C# project with dotnet.
-    3. Copies the DLL + manifest + assets into mod\SVP Collisions, Physics, and Hit Stops\.
+    3. Copies the DLL + manifest + assets into mod\SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More\.
     4. Creates a distributable zip in dist\.
 
 .PARAMETER GamePath
@@ -27,7 +27,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$ModFolder  = "SVP Collisions, Physics, and Hit Stops"
+$ModFolder  = "SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More"
 $ModDir     = Join-Path $PSScriptRoot "mod\$ModFolder"
 $ProjectDir = Join-Path $PSScriptRoot "src\StardewHdtPhysics"
 $CsprojPath = Join-Path $ProjectDir  "StardewHdtPhysics.csproj"

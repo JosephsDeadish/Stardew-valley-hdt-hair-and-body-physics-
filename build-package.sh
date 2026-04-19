@@ -9,7 +9,7 @@
 # On Linux it's typically ~/.local/share/Steam/steamapps/common/...
 set -euo pipefail
 
-MOD_FOLDER="SVP Collisions, Physics, and Hit Stops"
+MOD_FOLDER="SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MOD_DIR="$SCRIPT_DIR/mod/$MOD_FOLDER"
 PROJECT_DIR="$SCRIPT_DIR/src/StardewHdtPhysics"

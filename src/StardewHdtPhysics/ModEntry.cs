@@ -110,6 +110,8 @@ public sealed class ModEntry : Mod
             this.Monitor.Log("SpaceCore detected — custom skill level-up physics enabled.", LogLevel.Info);
         }
 
+        this.DetectWeatherMods(helper);
+
         // GMCM registration happens in OnGameLaunched (after all mods have loaded) for correct API availability
 
         helper.Events.GameLoop.UpdateTicked += this.OnUpdateTicked;
@@ -132,7 +134,7 @@ public sealed class ModEntry : Mod
         this.UpdateWindStrength();
 
         // Show in-game HUD message so the player knows the mod is active
-        Game1.addHUDMessage(new HUDMessage("SVP Collisions, Physics, and Hit Stops — active", HUDMessage.achievement_type));
+        Game1.addHUDMessage(new HUDMessage("SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More — active", HUDMessage.achievement_type));
     }
 
     private void OnDayStarted(object? sender, DayStartedEventArgs e)
@@ -142,10 +144,10 @@ public sealed class ModEntry : Mod
 
     private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
     {
-        this.Monitor.Log("╔══════════════════════════════════════════════════════╗", LogLevel.Info);
-        this.Monitor.Log("║  SVP Collisions, Physics, and Hit Stops — v0.2.0     ║", LogLevel.Info);
-        this.Monitor.Log("║  Successfully initialized.                           ║", LogLevel.Info);
-        this.Monitor.Log("╠══════════════════════════════════════════════════════╣", LogLevel.Info);
+        this.Monitor.Log("╔══════════════════════════════════════════════════════════════╗", LogLevel.Info);
+        this.Monitor.Log("║  SVP Physics, Collisions, Hitstops, Idles, Ragdolls — v0.4.0 ║", LogLevel.Info);
+        this.Monitor.Log("║  Successfully initialized.                                   ║", LogLevel.Info);
+        this.Monitor.Log("╠══════════════════════════════════════════════════════════════╣", LogLevel.Info);
         this.Monitor.Log($"║  Body physics:           {(this.config.EnableBodyPhysics ? "ON " : "OFF")}", LogLevel.Info);
         this.Monitor.Log($"║  Hair physics (HDT):     {(this.config.EnableHairPhysics ? "ON " : "OFF")}", LogLevel.Info);
         this.Monitor.Log($"║  Clothing flow physics:  {(this.config.EnableClothingFlowPhysics ? "ON " : "OFF")}", LogLevel.Info);
@@ -163,12 +165,17 @@ public sealed class ModEntry : Mod
         this.Monitor.Log($"║  Warp-step impulse:      {(this.config.EnableWarpStepImpulse ? "ON " : "OFF")}", LogLevel.Info);
         this.Monitor.Log($"║  Eating bounce:          {(this.config.EnableEatingBounce ? "ON " : "OFF")}", LogLevel.Info);
         this.Monitor.Log($"║  Lightning flinch:       {(this.config.EnableLightningFlinch ? "ON " : "OFF")}", LogLevel.Info);
-        this.Monitor.Log("╠══════════════════════════════════════════════════════╣", LogLevel.Info);
+        this.Monitor.Log($"║  Blood splatter VFX:     {(this.config.EnableBloodSplatterEffects ? "ON " : "OFF")}", LogLevel.Info);
+        this.Monitor.Log($"║  Spark VFX:              {(this.config.EnableSparkEffects ? "ON " : "OFF")}", LogLevel.Info);
+        this.Monitor.Log($"║  Slime spray VFX:        {(this.config.EnableSlimeSprayEffects ? "ON " : "OFF")}", LogLevel.Info);
+        this.Monitor.Log($"║  Tool collision hitstop: {(this.config.EnableToolCollisionHitstop ? "ON " : "OFF")}", LogLevel.Info);
+        this.Monitor.Log("╠══════════════════════════════════════════════════════════════╣", LogLevel.Info);
         this.Monitor.Log($"║  Fashion Sense:   {(this.fashionSenseLoaded ? "✓ detected" : "not detected (optional)")}", LogLevel.Info);
         this.Monitor.Log($"║  Druid mod:       {(this.druidModLoaded ? "✓ detected (dragon physics active)" : "not detected (optional)")}", LogLevel.Info);
         this.Monitor.Log($"║  Magic/SpaceCore: {(this.magicModLoaded ? "✓ detected (spell physics active)" : "not detected (optional)")}", LogLevel.Info);
+        this.Monitor.Log($"║  Weather mods:    {this.detectedWeatherMods}", LogLevel.Info);
         this.Monitor.Log($"║  Preset loaded:   {this.config.Preset}", LogLevel.Info);
-        this.Monitor.Log("╚══════════════════════════════════════════════════════╝", LogLevel.Info);
+        this.Monitor.Log("╚══════════════════════════════════════════════════════════════╝", LogLevel.Info);
 
         // Re-register GMCM now that all mods have loaded so the page picks up the correct name.
         this.RegisterConfigMenu();
@@ -405,6 +412,7 @@ public sealed class ModEntry : Mod
             this.SimulateHair(character, velocity);
             this.SimulateIdle(character, velocity);
             this.SimulateClothing(character, velocity, profile);
+            this.SimulateRunStepImpulse(character, velocity, profile);
             this.TryApplyLowHealthRagdoll(character, velocity);
             this.TickNpcKnockdown(character);
 
@@ -438,8 +446,14 @@ public sealed class ModEntry : Mod
 
                 var velocity = current - last;
                 var profile = this.detector.Resolve(monster);
+                var archetype = this.DetectMonsterArchetype(monster);
                 this.SimulateMonsterBody(monster, profile, velocity);
                 this.SimulateMonsterRagdoll(monster, velocity);
+                // Idle physics when the monster is roughly stationary
+                if (velocity.LengthSquared() < 0.5f)
+                {
+                    this.SimulateMonsterIdle(monster, archetype);
+                }
 
                 this.lastPositions[key] = current;
             }
@@ -461,6 +475,11 @@ public sealed class ModEntry : Mod
                 var velocity = current - last;
                 this.SimulateFarmAnimalBody(animal, velocity);
                 this.TickFarmAnimalKnockdown(animal);
+                // Idle physics when the animal is roughly stationary
+                if (velocity.LengthSquared() < 0.3f)
+                {
+                    this.SimulateFarmAnimalIdle(animal);
+                }
 
                 this.lastPositions[key] = current;
             }
@@ -576,6 +595,9 @@ public sealed class ModEntry : Mod
         {
             this.ApplyMagicCastPhysics(Game1.player);
         }
+
+        // Combat hit VFX: spark on stone/metal, slime spray, blood splatter
+        this.ApplyCombatHitVfx(Game1.player.CurrentTool, Game1.player);
     }
 
     // ── State helpers ─────────────────────────────────────────────────────────
@@ -600,6 +622,7 @@ public sealed class ModEntry : Mod
         this.lastSkillLevelSum = -1;
         this.levelUpBounceTicksRemaining = 0;
         this.dragonRagdollCooldown.Clear();
+        this.idleCycleStep.Clear();
     }
 
     private void LoadData(IModHelper helper)
@@ -686,6 +709,10 @@ public sealed class ModEntry : Mod
         }
 
         this.currentWindStrength = Math.Clamp(wind, 0f, 1.5f);
+
+        // Boost from any detected weather mods
+        this.ReadWeatherModBoosts(ref wind);
+        this.currentWindStrength = Math.Clamp(wind, 0f, 1.5f);
     }
 
     private float GetHairWindMultiplier()
@@ -698,7 +725,630 @@ public sealed class ModEntry : Mod
         return this.config.HairWindBoostOutdoors + (this.currentWindStrength * 0.35f);
     }
 
-    // ── Character enumeration ─────────────────────────────────────────────────
+    // ── Weather mod detection ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Detects which weather mods are present and logs them.
+    /// Called once during Entry() after all individual mod detections.
+    /// Results stored in bool fields used by ReadWeatherModBoosts().
+    /// </summary>
+    private void DetectWeatherMods(IModHelper helper)
+    {
+        var detected = new List<string>();
+
+        this.moreRainLoaded = helper.ModRegistry.IsLoaded("cat.morerain")
+            || helper.ModRegistry.IsLoaded("MoreRain")
+            || helper.ModRegistry.IsLoaded("Satozaki.MoreRain");
+        if (this.moreRainLoaded) detected.Add("More Rain");
+
+        this.climateOfFerngillLoaded = helper.ModRegistry.IsLoaded("KoihimeNakamura.ClimateOfFerngill")
+            || helper.ModRegistry.IsLoaded("KoihimeNakamura.WeatherControl")
+            || helper.ModRegistry.IsLoaded("Satozaki.ClimateControl")
+            || helper.ModRegistry.IsLoaded("ClimateOfFerngill");
+        if (this.climateOfFerngillLoaded) detected.Add("Climate of Ferngill");
+
+        this.windEffectsLoaded = helper.ModRegistry.IsLoaded("aedenthorn.WindEffects")
+            || helper.ModRegistry.IsLoaded("windeffects")
+            || helper.ModRegistry.IsLoaded("aedenthorn.wind");
+        if (this.windEffectsLoaded) detected.Add("Wind Effects");
+
+        this.cloudySkiesLoaded = helper.ModRegistry.IsLoaded("tlitookilakin.CloudySkies")
+            || helper.ModRegistry.IsLoaded("CloudySkies")
+            || helper.ModRegistry.IsLoaded("tlitookilakin.skies");
+        if (this.cloudySkiesLoaded) detected.Add("Cloudy Skies");
+
+        this.sveWeatherLoaded = helper.ModRegistry.IsLoaded("FlashShifter.StardewValleyExpandedCP")
+            || helper.ModRegistry.IsLoaded("FlashShifter.SVECode")
+            || helper.ModRegistry.IsLoaded("MonsoonalMoth.DruidMod");
+        if (this.sveWeatherLoaded) detected.Add("SVE / Druid weather");
+
+        this.extremeWeatherLoaded = helper.ModRegistry.IsLoaded("shekurika.ExtremeWeather")
+            || helper.ModRegistry.IsLoaded("ExtremeWeather")
+            || helper.ModRegistry.IsLoaded("Satozaki.weathervane")
+            || helper.ModRegistry.IsLoaded("weathervane");
+        if (this.extremeWeatherLoaded) detected.Add("Extreme Weather");
+
+        this.detectedWeatherMods = detected.Count > 0 ? string.Join(", ", detected) : "none";
+
+        if (detected.Count > 0)
+        {
+            this.Monitor.Log($"Weather mods detected: {this.detectedWeatherMods} — physics will react to their weather states.", LogLevel.Info);
+        }
+    }
+
+    /// <summary>
+    /// After vanilla wind/rain/snow has been set, apply boosts from any active weather mods.
+    /// Uses safe reflection for 1.5/1.6 cross-version fields (e.g. hasGreenRain).
+    /// </summary>
+    private void ReadWeatherModBoosts(ref float wind)
+    {
+        // More Rain / Climate of Ferngill: heavier rain on rainy days
+        if ((this.moreRainLoaded || this.climateOfFerngillLoaded) && Game1.isRaining)
+        {
+            wind = Math.Max(wind, 0.75f);
+            this.currentRainStrength = Math.Max(this.currentRainStrength, 0.7f);
+        }
+
+        // Wind Effects mod: try to read its wind strength value via reflection
+        if (this.windEffectsLoaded)
+        {
+            this.TryReadWindEffectsStrength(ref wind);
+        }
+
+        // SVE / Druid: thundersnow → max storm physics
+        if (this.sveWeatherLoaded && Game1.isSnowing && Game1.isLightning)
+        {
+            wind = Math.Max(wind, 1.2f);
+            this.currentSnowStrength = Math.Max(this.currentSnowStrength, 0.8f);
+        }
+
+        // Extreme weather: amplify any existing storm conditions
+        if (this.extremeWeatherLoaded && Game1.isRaining && Game1.isLightning)
+        {
+            wind = Math.Max(wind, 1.3f);
+            this.currentRainStrength = Math.Max(this.currentRainStrength, 0.95f);
+        }
+
+        // Cloudy Skies: moderate wind boost on overcast days (no rain detection needed)
+        if (this.cloudySkiesLoaded && !Game1.isRaining && !Game1.isSnowing)
+        {
+            wind = Math.Max(wind, 0.30f);
+        }
+
+        // Green rain (Stardew 1.6 only — hasGreenRain field via safe reflection)
+        this.TryApplyGreenRainBoost(ref wind);
+    }
+
+    /// <summary>
+    /// Tries to read aedenthorn.WindEffects current wind strength via reflection.
+    /// Safe to call on any game version — returns without effect if field not found.
+    /// </summary>
+    private void TryReadWindEffectsStrength(ref float wind)
+    {
+        try
+        {
+            // WindEffects stores wind in a static field named "windStrength" or "wind"
+            var assembly = AppDomain.CurrentDomain.GetAssemblies()
+                .FirstOrDefault(a => a.GetName().Name?.Contains("WindEffects", StringComparison.OrdinalIgnoreCase) == true);
+            if (assembly is null) return;
+
+            var modType = assembly.GetTypes()
+                .FirstOrDefault(t => t.Name.Contains("WindEffects") || t.Name.Contains("ModEntry"));
+            if (modType is null) return;
+
+            var field = modType.GetField("windStrength",
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+                ?? modType.GetField("wind",
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+
+            if (field?.GetValue(null) is float w && w > wind)
+            {
+                wind = Math.Clamp(w, 0f, 1.5f);
+            }
+        }
+        catch
+        {
+            // Reflection may fail — silently fall back to vanilla wind
+        }
+    }
+
+    /// <summary>
+    /// Green rain is a Stardew 1.6-only feature. Reads Game1.locationContext or the
+    /// location's hasGreenRain property via reflection so the mod stays compatible
+    /// with both 1.5.6 (field absent) and 1.6.x (field present).
+    /// </summary>
+    private void TryApplyGreenRainBoost(ref float wind)
+    {
+        try
+        {
+            var locType = Game1.currentLocation?.GetType();
+            if (locType is null) return;
+
+            var prop = locType.GetProperty("hasGreenRain",
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+                ?? locType.GetProperty("IsGreenRain",
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+
+            if (prop?.GetValue(Game1.currentLocation) is bool greenRain && greenRain)
+            {
+                // Green rain: magical heavy downpour + gentle mystical wind
+                wind = Math.Max(wind, 0.55f);
+                this.currentRainStrength = Math.Max(this.currentRainStrength, 0.75f);
+            }
+        }
+        catch
+        {
+            // 1.5.6 doesn't have this property — silently ignore
+        }
+    }
+
+    // ── Per-profile cycling idle impulses ─────────────────────────────────────
+
+    /// <summary>
+    /// Returns the body impulse for step N of the 8-step feminine idle cycle.
+    /// Each step is a distinct movement: hip roll, chest pop, sashay, curtsy dip,
+    /// arm reach, weight shift, slow turn, shimmy. Scaled by strength.
+    /// </summary>
+    private static Vector2 GetFeminineIdleImpulse(int step, float strength)
+    {
+        return step switch
+        {
+            0 => new Vector2(-0.055f, 0.020f) * strength,  // hip roll right
+            1 => new Vector2(0f,     -0.040f) * strength,  // chest pop up
+            2 => new Vector2(0.060f,  0.015f) * strength,  // sashay left
+            3 => new Vector2(-0.060f, 0.015f) * strength,  // sashay right (pair)
+            4 => new Vector2(0f,      0.055f) * strength,  // curtsy dip: downward lean
+            5 => new Vector2(-0.030f,-0.025f) * strength,  // arm reach left-up
+            6 => new Vector2(0.030f,  0.030f) * strength,  // weight shift forward
+            7 => new Vector2(0f,     -0.020f) * strength,  // subtle torso uplift / shimmy
+            _ => Vector2.Zero
+        };
+    }
+
+    /// <summary>
+    /// Returns the body impulse for step N of the 8-step masculine idle cycle.
+    /// Movements: chest puff, shoulder roll L, shoulder roll R, wide bounce, lean-back,
+    /// power stomp, arm flex, side stretch. More vertical/grounded than feminine.
+    /// </summary>
+    private static Vector2 GetMasculineIdleImpulse(int step, float strength)
+    {
+        return step switch
+        {
+            0 => new Vector2(0f,     -0.050f) * strength,  // chest puff up
+            1 => new Vector2(-0.045f, 0.015f) * strength,  // shoulder roll left
+            2 => new Vector2(0.045f,  0.015f) * strength,  // shoulder roll right
+            3 => new Vector2(0f,      0.060f) * strength,  // wide-stance bounce down
+            4 => new Vector2(0f,      0.030f) * strength,  // lean-back weight settle
+            5 => new Vector2(0f,      0.070f) * strength,  // power stomp (vertical)
+            6 => new Vector2(-0.035f,-0.010f) * strength,  // arm flex left
+            7 => new Vector2(0.025f, -0.015f) * strength,  // side stretch right
+            _ => Vector2.Zero
+        };
+    }
+
+    /// <summary>
+    /// Returns the body impulse for step N of the 8-step androgynous idle cycle.
+    /// Mixed moves: neutral sway, gentle lean, slow rock, arm stretch, bob.
+    /// </summary>
+    private static Vector2 GetAndrogynousIdleImpulse(int step, float strength)
+    {
+        return step switch
+        {
+            0 => new Vector2(-0.030f, 0.020f) * strength,  // gentle sway left
+            1 => new Vector2(0.030f,  0.020f) * strength,  // gentle sway right
+            2 => new Vector2(0f,     -0.035f) * strength,  // soft upward lift
+            3 => new Vector2(0f,      0.040f) * strength,  // soft settle down
+            4 => new Vector2(-0.025f,-0.015f) * strength,  // diagonal lean left-up
+            5 => new Vector2(0.025f, -0.015f) * strength,  // diagonal lean right-up
+            6 => new Vector2(0f,      0.025f) * strength,  // slow downward rock
+            7 => new Vector2(0f,     -0.018f) * strength,  // micro uplift / breathing
+            _ => Vector2.Zero
+        };
+    }
+
+    // ── Monster idle physics ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// Applies archetype-specific idle impulses to a stationary monster.
+    /// Each archetype has a unique ambient animation: Slime pulses, Bat wing-twitches,
+    /// Worm peristaltic waves, Bug constant buzz, Furry tail wag, Skeleton bone rattle,
+    /// Dragon breathing + wing flutter, Elemental sinusoidal energy pulse.
+    /// Only fires when the monster is roughly stationary (velocity small).
+    /// </summary>
+    private void SimulateMonsterIdle(NPC monster, MonsterPhysicsArchetype archetype)
+    {
+        if (!this.config.EnableMonsterBodyPhysics) return;
+
+        var key      = this.GetCharacterKey(monster);
+        var strength = this.config.MonsterArchetypeStrength;
+        var t        = Game1.ticks;
+
+        var existing = this.monsterBodyImpulse.TryGetValue(key, out var mi) ? mi : Vector2.Zero;
+        Vector2 idle;
+
+        switch (archetype)
+        {
+            case MonsterPhysicsArchetype.Slime:
+                // Rhythmic compression-expansion pulse: Y-dominant, slow period ~40 ticks
+                idle = new Vector2(
+                    (float)Math.Sin(t * 0.08f) * 0.018f,
+                    (float)Math.Sin(t * 0.16f) * 0.030f) * strength;
+                break;
+
+            case MonsterPhysicsArchetype.Bat:
+                // Wing-fold twitch: fast lateral micro-flap at ~15 tick intervals
+                idle = (t % 15 < 3)
+                    ? new Vector2((Game1.random.NextSingle() - 0.5f) * 0.04f, -0.015f) * strength
+                    : Vector2.Zero;
+                break;
+
+            case MonsterPhysicsArchetype.Worm:
+                // Peristaltic wave: sinusoidal Y-dominant with slight phase shift per key
+                var phase = (key & 0x1F) * 0.2f;
+                idle = new Vector2(
+                    (float)Math.Sin(t * 0.12f + phase) * 0.012f,
+                    (float)Math.Cos(t * 0.09f + phase) * 0.025f) * strength;
+                break;
+
+            case MonsterPhysicsArchetype.FlyingBug:
+                // Constant high-frequency micro-oscillation (wing buzz)
+                idle = new Vector2(
+                    (Game1.random.NextSingle() - 0.5f) * 0.022f,
+                    (Game1.random.NextSingle() - 0.5f) * 0.018f) * strength;
+                break;
+
+            case MonsterPhysicsArchetype.Furry:
+                // Slow tail-wag side-to-side + occasional head toss
+                idle = new Vector2((float)Math.Sin(t * 0.06f) * 0.020f, 0f) * strength;
+                if (t % 80 < 5) idle += new Vector2(0f, -0.025f) * strength; // head toss
+                break;
+
+            case MonsterPhysicsArchetype.Skeleton:
+                // Bone rattle: random sharp micro-jitter every ~25 ticks
+                idle = (t % 25 < 3)
+                    ? new Vector2((Game1.random.NextSingle() - 0.5f) * 0.05f,
+                                  (Game1.random.NextSingle() - 0.5f) * 0.05f) * strength
+                    : Vector2.Zero;
+                break;
+
+            case MonsterPhysicsArchetype.Dragon:
+            {
+                // Deep breathing (slow Y) + wing flutter (lateral ripple at ~35 ticks)
+                var dStr = strength * this.config.DragonPhysicsStrength;
+                idle = new Vector2(0f, (float)Math.Sin(t * 0.04f) * 0.020f) * dStr;
+                if (t % 35 < 4)
+                {
+                    idle += new Vector2((Game1.random.NextSingle() - 0.5f) * 0.035f, -0.010f) * dStr;
+                }
+                break;
+            }
+
+            case MonsterPhysicsArchetype.Elemental:
+                // Sinusoidal energy pulse: Lissajous figure for magical shimmering effect
+                idle = new Vector2(
+                    (float)Math.Sin(t * 0.20f) * 0.020f,
+                    (float)Math.Cos(t * 0.17f) * 0.020f) * strength;
+                break;
+
+            default: // Generic
+                // Ambient ambient sway: slow gentle rock
+                idle = new Vector2((float)Math.Sin(t * 0.05f) * 0.010f, 0f) * strength;
+                break;
+        }
+
+        if (idle != Vector2.Zero)
+        {
+            this.monsterBodyImpulse[key] = (existing + idle) * 0.90f;
+        }
+    }
+
+    // ── Farm animal idle physics ──────────────────────────────────────────────
+
+    /// <summary>
+    /// Applies idle physics to a stationary farm animal based on animal type.
+    /// Chicken/Duck = head peck, Rabbit = ear twitch, Cow/Goat/Sheep = tail swish + head bob,
+    /// Pig = sniff-bob, Ostrich = neck sway. All animals ambient-sway when no type matches.
+    /// Only fires when nearly stationary (low velocity).
+    /// </summary>
+    private void SimulateFarmAnimalIdle(StardewValley.Characters.FarmAnimal animal)
+    {
+        if (!this.config.EnableFarmAnimalPhysics) return;
+
+        var key      = RuntimeHelpers.GetHashCode(animal);
+        var strength = this.config.FarmAnimalPhysicsStrength;
+        var t        = Game1.ticks + (key & 0x3F); // per-animal phase offset
+        var name     = animal.type.Value ?? string.Empty;
+
+        var existing = this.monsterBodyImpulse.TryGetValue(key, out var mi) ? mi : Vector2.Zero;
+        Vector2 idle;
+
+        if (ContainsAny(name, "chicken", "hen", "rooster", "duck", "dinosaur"))
+        {
+            // Head peck: sharp downward dip every ~40 ticks
+            idle = (t % 40 < 4) ? new Vector2(0f, 0.030f) * strength : Vector2.Zero;
+        }
+        else if (ContainsAny(name, "rabbit", "bunny"))
+        {
+            // Ear twitch: fast lateral micro-flick every ~55 ticks
+            idle = (t % 55 < 3)
+                ? new Vector2((Game1.random.NextSingle() - 0.5f) * 0.035f, -0.008f) * strength
+                : Vector2.Zero;
+        }
+        else if (ContainsAny(name, "cow", "goat", "sheep", "yak"))
+        {
+            // Tail swish (lateral sine) + occasional slow head bob
+            idle = new Vector2((float)Math.Sin(t * 0.07f) * 0.015f, 0f) * strength;
+            if (t % 90 < 8) idle += new Vector2(0f, (float)Math.Sin(t * 0.3f) * 0.020f) * strength;
+        }
+        else if (ContainsAny(name, "pig", "boar"))
+        {
+            // Sniff-bob: small Y-oscillation like rooting in dirt
+            idle = new Vector2(0f, (float)Math.Sin(t * 0.18f) * 0.018f) * strength;
+        }
+        else if (ContainsAny(name, "ostrich", "emu"))
+        {
+            // Neck sway: exaggerated lateral sine for long neck
+            idle = new Vector2((float)Math.Sin(t * 0.10f) * 0.030f, 0f) * strength;
+        }
+        else
+        {
+            // Generic ambient sway for any mod-added animal
+            idle = new Vector2((float)Math.Sin(t * 0.06f) * 0.010f, 0f) * strength;
+        }
+
+        if (idle != Vector2.Zero)
+        {
+            this.monsterBodyImpulse[key] = (existing + idle) * 0.88f;
+        }
+    }
+
+    // ── Run-step impulse ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Applies step-rhythm body, hair, and clothing impulses during running to keep
+    /// physics visibly active even when moving fast.
+    /// Feminine: hip-led lateral bounce every other step.
+    /// Masculine: heel-strike vertical bounce.
+    /// Androgynous: mixed small bounce.
+    /// Fires when speed > 2.5 and on step cadence (ticks mod step period).
+    /// </summary>
+    private void SimulateRunStepImpulse(Character character, Vector2 velocity, BodyProfileType profile)
+    {
+        if (!this.config.EnableBodyPhysics) return;
+
+        var speed = velocity.Length();
+        if (speed < 2.5f) return;
+
+        var key      = this.GetCharacterKey(character);
+        var t        = Game1.ticks;
+        // Step period scales inversely with speed: faster = more frequent steps
+        var stepPeriod = Math.Max(8, (int)(22f / speed));
+
+        if (t % stepPeriod != (key & (stepPeriod - 1)) % stepPeriod) return;
+
+        var baseStr = profile switch
+        {
+            BodyProfileType.Feminine   => (this.config.FemaleBreastStrength + this.config.FemaleButtStrength) * 0.5f,
+            BodyProfileType.Masculine  => (this.config.MaleButtStrength     + this.config.MaleThighStrength)  * 0.5f,
+            _                          => 0.35f
+        };
+
+        // Alternate step side (left/right) by checking tick parity offset per character
+        var leftStep = ((t / stepPeriod) + (key & 1)) % 2 == 0;
+
+        Vector2 stepImpulse = profile switch
+        {
+            BodyProfileType.Feminine => new Vector2(leftStep ? -0.045f : 0.045f, -0.025f) * baseStr,
+            BodyProfileType.Masculine => new Vector2(0f, 0.060f) * baseStr,  // heel-strike: downward
+            _ => new Vector2(leftStep ? -0.020f : 0.020f, 0.020f) * baseStr
+        };
+
+        // Scale by speed factor — sprinting produces more jiggle than walking
+        var speedFactor = Math.Clamp(speed / 5f, 0.5f, 1.5f);
+        stepImpulse *= speedFactor;
+
+        var existing = this.bodyImpulse.TryGetValue(key, out var bi) ? bi : Vector2.Zero;
+        this.bodyImpulse[key] = existing + stepImpulse;
+
+        if (this.config.EnableHairPhysics)
+        {
+            var hExist = this.hairImpulse.TryGetValue(key, out var hi) ? hi : Vector2.Zero;
+            this.hairImpulse[key] = hExist + stepImpulse * (this.config.HairStrength * 0.55f);
+        }
+
+        if (this.config.EnableClothingFlowPhysics)
+        {
+            var flowType  = this.GetClothingFlowType(character);
+            var clothScale = flowType == ClothingFlowType.Flowy ? 0.65f : 0.30f;
+            var cExist    = this.clothingImpulse.TryGetValue(key, out var ci) ? ci : Vector2.Zero;
+            this.clothingImpulse[key] = cExist + stepImpulse * (clothScale * this.config.ClothingFlowStrength);
+        }
+    }
+
+    // ── Combat hit VFX ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Detects what material was hit by the current tool swing and applies appropriate VFX:
+    ///   Stone/metal nearby → spark particle burst + swing-back hitstop
+    ///   Slime monster nearby → green spray particles + extra slime jiggle impulse
+    ///   Humanoid / animal nearby → blood splatter particles
+    /// Called from OnButtonPressed when the player uses a tool/weapon.
+    /// All VFX are purely cosmetic — no damage, no gameplay state changes.
+    /// </summary>
+    private void ApplyCombatHitVfx(Tool? tool, Farmer player)
+    {
+        if (Game1.currentLocation is null || tool is null) return;
+
+        var playerPos  = player.Position;
+        var swingRange = 128f; // ~2 tiles
+
+        // ── Slime spray ───────────────────────────────────────────────────────
+        if (this.config.EnableSlimeSprayEffects)
+        {
+            foreach (var monster in this.EnumerateMonsters(Game1.currentLocation))
+            {
+                if (Vector2.Distance(monster.Position, playerPos) > swingRange) continue;
+                var archetype = this.DetectMonsterArchetype(monster);
+                if (archetype != MonsterPhysicsArchetype.Slime) continue;
+
+                // Spray 4–8 green debris particles outward from the slime
+                var sprayCount = (int)(4 + Game1.random.Next(5));
+                for (int i = 0; i < sprayCount; i++)
+                {
+                    var sprayAngle = Game1.random.NextSingle() * MathF.PI * 2f;
+                    var sprayDist  = 20f + Game1.random.NextSingle() * 40f;
+                    var sprayPos   = monster.Position + new Vector2(
+                        MathF.Cos(sprayAngle) * sprayDist,
+                        MathF.Sin(sprayAngle) * sprayDist);
+                    Game1.createRadialDebris(Game1.currentLocation, 6, (int)(sprayPos.X / 64), (int)(sprayPos.Y / 64), 1, false);
+                }
+
+                // Extra jiggle on the slime so it goes extra wobbly from the hit
+                var slimeKey = this.GetCharacterKey(monster);
+                var slimeImpulse = this.monsterBodyImpulse.TryGetValue(slimeKey, out var si) ? si : Vector2.Zero;
+                slimeImpulse += new Vector2(
+                    (Game1.random.NextSingle() - 0.5f) * 0.30f,
+                    (Game1.random.NextSingle() - 0.5f) * 0.30f) * this.config.MonsterArchetypeStrength;
+                this.monsterBodyImpulse[slimeKey] = slimeImpulse;
+            }
+        }
+
+        // ── Blood splatter ────────────────────────────────────────────────────
+        if (this.config.EnableBloodSplatterEffects)
+        {
+            // NPCs / monsters in range
+            foreach (var npc in Game1.currentLocation.characters)
+            {
+                if (Vector2.Distance(npc.Position, playerPos) > swingRange) continue;
+                this.SpawnBloodParticles(npc.Position, this.config.BloodSplatterIntensity);
+            }
+
+            // Farm animals in range
+            foreach (var animal in EnumerateFarmAnimals(Game1.currentLocation))
+            {
+                if (Vector2.Distance(animal.Position, playerPos) > swingRange) continue;
+                this.SpawnBloodParticles(animal.Position, this.config.BloodSplatterIntensity * 0.6f);
+            }
+        }
+
+        // ── Spark VFX + tool swing-back hitstop ───────────────────────────────
+        if (this.config.EnableSparkEffects || this.config.EnableToolCollisionHitstop)
+        {
+            var hitHard = this.DetectHardSurfaceNear(player);
+            if (hitHard)
+            {
+                if (this.config.EnableSparkEffects)
+                {
+                    var sparkCount = tool is Pickaxe ? 8 : (tool is MeleeWeapon ? 5 : 4);
+                    for (int i = 0; i < sparkCount; i++)
+                    {
+                        var sAngle = Game1.random.NextSingle() * MathF.PI * 2f;
+                        var sDist  = 15f + Game1.random.NextSingle() * 25f;
+                        var sPos   = playerPos + new Vector2(MathF.Cos(sAngle) * sDist, MathF.Sin(sAngle) * sDist);
+                        // Use debris type 10 (yellow/orange sparkle) for sparks
+                        Game1.createRadialDebris(Game1.currentLocation, 10, (int)(sPos.X / 64), (int)(sPos.Y / 64), 1, false);
+                    }
+                }
+
+                if (this.config.EnableToolCollisionHitstop)
+                {
+                    // Swing-back: strong reverse impulse in facing direction (tool bounces back)
+                    var swingBackDir = Game1.player.FacingDirection switch
+                    {
+                        0 => new Vector2(0f,  1f),   // facing up    → swing-back downward
+                        1 => new Vector2(-1f, 0f),   // facing right → swing-back left
+                        2 => new Vector2(0f, -1f),   // facing down  → swing-back upward
+                        3 => new Vector2(1f,  0f),   // facing left  → swing-back right
+                        _ => Vector2.Zero
+                    };
+
+                    var playerKey = this.GetCharacterKey(player);
+                    var existBody = this.bodyImpulse.TryGetValue(playerKey, out var pb) ? pb : Vector2.Zero;
+                    this.bodyImpulse[playerKey] = existBody + swingBackDir * 0.35f;
+
+                    // Extra hitstop frames on hard collision
+                    if (this.config.EnableHitstopEffect)
+                    {
+                        this.hitstopTicksRemaining = Math.Max(this.hitstopTicksRemaining, 5);
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Spawns red radial debris particles to simulate blood splatter at the given world position.
+    /// Intensity 1.0 = 4–6 particles. Purely cosmetic.
+    /// </summary>
+    private void SpawnBloodParticles(Vector2 worldPos, float intensity)
+    {
+        if (Game1.currentLocation is null) return;
+        var count = Math.Max(1, (int)(4 * intensity) + Game1.random.Next(3));
+        for (int i = 0; i < count; i++)
+        {
+            var angle = Game1.random.NextSingle() * MathF.PI * 2f;
+            var dist  = 10f + Game1.random.NextSingle() * 30f * intensity;
+            var pos   = worldPos + new Vector2(MathF.Cos(angle) * dist, MathF.Sin(angle) * dist);
+            // Debris type 8 = red/berry-colored debris, best approximation for blood
+            Game1.createRadialDebris(Game1.currentLocation, 8, (int)(pos.X / 64), (int)(pos.Y / 64), 1, false);
+        }
+    }
+
+    /// <summary>
+    /// Returns true if there is a hard surface (stone wall, metal furniture, large rock object,
+    /// armored monster) within ~1.5 tiles of the player in their facing direction.
+    /// Used to trigger spark VFX and tool swing-back hitstop.
+    /// Checks: resource clumps, large stone/metal objects, armored monsters.
+    /// </summary>
+    private bool DetectHardSurfaceNear(Farmer player)
+    {
+        if (Game1.currentLocation is null) return false;
+
+        var facingOffset = player.FacingDirection switch
+        {
+            0 => new Vector2(0f, -64f),
+            1 => new Vector2(64f, 0f),
+            2 => new Vector2(0f,  64f),
+            3 => new Vector2(-64f, 0f),
+            _ => Vector2.Zero
+        };
+        var checkPos = player.Position + facingOffset;
+        var checkTile = checkPos / 64f;
+
+        // Check resource clumps (boulders, stumps) in the location
+        if (Game1.currentLocation is Farm || Game1.currentLocation is MineShaft || true)
+        {
+            foreach (var clump in Game1.currentLocation.resourceClumps)
+            {
+                if (Vector2.Distance(clump.Tile * 64f, checkPos) < 96f)
+                {
+                    return true;
+                }
+            }
+        }
+
+        // Check objects at the facing tile (stones, metal furniture, large items)
+        var tileKey = new Vector2((int)checkTile.X, (int)checkTile.Y);
+        if (Game1.currentLocation.objects.TryGetValue(tileKey, out var obj))
+        {
+            var objName = obj.Name ?? string.Empty;
+            if (ContainsAny(objName, "stone", "rock", "ore", "metal", "iron", "copper", "iridium", "coal",
+                                     "boulder", "wall", "chest", "furnace", "anvil", "forge"))
+            {
+                return true;
+            }
+        }
+
+        // Check armored monsters nearby
+        foreach (var monster in this.EnumerateMonsters(Game1.currentLocation))
+        {
+            if (Vector2.Distance(monster.Position, player.Position) > 100f) continue;
+            var arch = this.DetectMonsterArchetype(monster);
+            if (arch == MonsterPhysicsArchetype.Skeleton) return true; // armored/hard
+        }
+
+        return false;
+    }
 
     private IEnumerable<Character> EnumerateHumanoids(GameLocation location)
     {
@@ -1761,11 +2411,16 @@ public sealed class ModEntry : Mod
 
         var impulse = this.bodyImpulse.TryGetValue(key, out var existing) ? existing : Vector2.Zero;
 
-        // Extended idle type selection — many more contextual types
-        var animRoll = Game1.random.NextDouble();
+        // ── Per-profile 8-step cycling idle (primary, fires ~50% of idle bursts) ─
+        // Each character cycles deterministically through 8 profile-specific moves.
+        // The profile-specific cycles are checked first so female/male motions dominate;
+        // contextual weather idles can still override when conditions are active.
+        var profile   = this.detector.Resolve(character);
+        var animRoll  = Game1.random.NextDouble();
         Vector2 idleImpulse;
 
-        // Weather/season-contextual idles (checked first, override generic)
+        // Weather/season-contextual idles (checked first at low probability so they
+        // can interrupt the cycling sequence during extreme weather/seasons)
         if (animRoll < 0.07 && this.currentRainStrength > 0.2f && Game1.currentLocation?.IsOutdoors == true)
         {
             // Shudder: full-body shiver from being cold and wet
@@ -1861,9 +2516,20 @@ public sealed class ModEntry : Mod
         }
         else
         {
-            // Twirl: full diagonal circular push
-            var angle = (float)(Game1.random.NextDouble() * Math.PI * 2.0);
-            idleImpulse = new Vector2((float)Math.Cos(angle), (float)Math.Sin(angle)) * 0.58f * idleStr;
+            // ── Per-profile 8-step cycling idle ──────────────────────────────
+            // Advance this character's cycle step (seeded from key for unique offset)
+            if (!this.idleCycleStep.TryGetValue(key, out var step))
+            {
+                step = key & 0x07; // unique start offset 0–7 per character
+            }
+            this.idleCycleStep[key] = (step + 1) & 0x07;
+
+            idleImpulse = profile switch
+            {
+                BodyProfileType.Feminine  => GetFeminineIdleImpulse(step, idleStr),
+                BodyProfileType.Masculine => GetMasculineIdleImpulse(step, idleStr),
+                _                         => GetAndrogynousIdleImpulse(step, idleStr)
+            };
         }
 
         this.bodyImpulse[key] = impulse + idleImpulse;
@@ -3385,6 +4051,37 @@ public sealed class ModEntry : Mod
             () => this.config.EnableLightningFlinch, v => this.config.EnableLightningFlinch = v,
             () => "Enable lightning flinch",
             () => "Sharp random-direction body flinch + electric hair whip + brief screen flash when lightning strikes outdoors.");
+
+        // ── Combat hit VFX ────────────────────────────────────────────────────
+        api.AddSectionTitle(this.ModManifest, () => "Combat Hit VFX");
+        api.AddParagraph(this.ModManifest, () =>
+            "Cosmetic particle effects and physics reactions on weapon/tool hits:\n" +
+            "  Sparks: yellow/orange particles burst when hitting stone, metal, ore, rock, or armored monsters.\n" +
+            "  Slime spray: green slime particles fly + extra slime jiggle when hitting slimes.\n" +
+            "  Blood splatter: red debris particles when hitting humanoids, monsters, or farm animals.\n" +
+            "  Tool collision hitstop: weapon bounces back (swing-back impulse) + extra freeze frames when hitting hard surfaces.\n" +
+            "All effects are purely cosmetic — no gameplay changes, no extra damage.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableSparkEffects, v => this.config.EnableSparkEffects = v,
+            () => "Enable spark VFX",
+            () => "Burst of spark particles when a weapon or pickaxe hits stone, metal, ore, boulders, or armored enemies.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableSlimeSprayEffects, v => this.config.EnableSlimeSprayEffects = v,
+            () => "Enable slime spray VFX",
+            () => "Green slime particle spray + extra body jiggle on the slime when it is struck. Slimes go extra wobbly!");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableBloodSplatterEffects, v => this.config.EnableBloodSplatterEffects = v,
+            () => "Enable blood splatter VFX",
+            () => "Red particle spray when a weapon hits a humanoid NPC, monster, or farm animal. Toggle off for cleaner gameplay.");
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.BloodSplatterIntensity, v => this.config.BloodSplatterIntensity = v,
+            () => "Blood splatter intensity",
+            () => "How many blood particles spawn per hit. 0 = off, 1 = default (4–6 particles), 2 = dramatic spray.",
+            0f, 2f, 0.1f);
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableToolCollisionHitstop, v => this.config.EnableToolCollisionHitstop = v,
+            () => "Enable tool collision hitstop",
+            () => "When a sword or pickaxe hits stone/metal, the player's body recoils backward (swing-back impulse) and extra hitstop frames fire. Simulates tool bouncing off hard material.");
 
         // ── Gender overrides ──────────────────────────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "Gender Overrides");

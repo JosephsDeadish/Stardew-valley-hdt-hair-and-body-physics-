@@ -26,8 +26,8 @@ jobs:
 
       - name: Validate mod folder manifest.json
         run: |
-          echo "Checking mod/SVP Collisions, Physics, and Hit Stops/manifest.json ..."
-          python3 -c "import json,sys; json.load(open('mod/SVP Collisions, Physics, and Hit Stops/manifest.json')); print('  OK')"
+          echo "Checking mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/manifest.json ..."
+          python3 -c "import json,sys; json.load(open('mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/manifest.json')); print('  OK')"
 
       # ── Verify both manifests agree on UniqueID and Version ─────────────────
       - name: Check manifest consistency
@@ -36,7 +36,7 @@ jobs:
           import json, sys
 
           src = json.load(open("src/StardewHdtPhysics/manifest.json"))
-          mod = json.load(open("mod/SVP Collisions, Physics, and Hit Stops/manifest.json"))
+          mod = json.load(open("mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/manifest.json"))
 
           errors = []
           for field in ("UniqueID", "Version", "EntryDll", "Name", "Author"):
@@ -56,10 +56,10 @@ jobs:
       - name: Validate asset JSON files
         run: |
           for f in \
-            "mod/SVP Collisions, Physics, and Hit Stops/assets/presets.json" \
-            "mod/SVP Collisions, Physics, and Hit Stops/assets/spriteProfiles.json" \
-            "mod/SVP Collisions, Physics, and Hit Stops/assets/monsterArchetypes.json" \
-            "mod/SVP Collisions, Physics, and Hit Stops/assets/debrisPhysics.json"
+            "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/presets.json" \
+            "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/spriteProfiles.json" \
+            "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/monsterArchetypes.json" \
+            "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/debrisPhysics.json"
           do
             echo "Checking $f ..."
             python3 -c "import json; json.load(open('$f')); print('  OK')"
@@ -69,12 +69,12 @@ jobs:
       - name: Verify installable folder structure
         run: |
           required=(
-            "mod/SVP Collisions, Physics, and Hit Stops/manifest.json"
-            "mod/SVP Collisions, Physics, and Hit Stops/README.txt"
-            "mod/SVP Collisions, Physics, and Hit Stops/assets/presets.json"
-            "mod/SVP Collisions, Physics, and Hit Stops/assets/spriteProfiles.json"
-            "mod/SVP Collisions, Physics, and Hit Stops/assets/monsterArchetypes.json"
-            "mod/SVP Collisions, Physics, and Hit Stops/assets/debrisPhysics.json"
+            "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/manifest.json"
+            "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/README.txt"
+            "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/presets.json"
+            "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/spriteProfiles.json"
+            "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/monsterArchetypes.json"
+            "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/debrisPhysics.json"
           )
           missing=0
           for f in "${required[@]}"; do
