@@ -10,7 +10,7 @@
       ModFolderName controls the subfolder created in Stardew Valley/Mods/ when you
       build locally with a valid GamePath.  Spaces and commas are safe on all platforms.
     -->
-    <AssemblyName>StardewHdtPhysics</AssemblyName>
+    <AssemblyName>SVPPhysics</AssemblyName>
     <ModFolderName>SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More</ModFolderName>
 
     <!--

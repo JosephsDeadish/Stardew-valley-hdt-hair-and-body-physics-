@@ -56,7 +56,7 @@ Stardrop automatically handles SMAPI and places the mod in the correct folder.
    └── Mods/
        └── SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/
            ├── manifest.json           ← SMAPI reads this
-           ├── StardewHdtPhysics.dll
+           ├── SVPPhysics.dll
            └── assets/
    ```
 
@@ -183,7 +183,7 @@ Repository
 ├── mod/
 │   └── SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/    ← drag this folder into Mods/
 │       ├── manifest.json
-│       ├── StardewHdtPhysics.dll                  ← added by build-package script
+│       ├── SVPPhysics.dll                  ← added by build-package script
 │       ├── README.txt
 │       └── assets/
 │           ├── presets.json

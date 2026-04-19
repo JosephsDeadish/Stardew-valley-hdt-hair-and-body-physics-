@@ -6,7 +6,7 @@ obj/
 # Distribution output (created by build-package scripts)
 dist/
 
-# NOTE: StardewHdtPhysics.dll IS tracked in git so the mod/ folder is
+# NOTE: SVPPhysics.dll IS tracked in git so the mod/ folder is
 # always complete and installable without a local build.
 # The DLL is produced by the build-release.yml CI workflow or locally via
 # build-package.sh and then committed.  Binary is small (<500 KB) and

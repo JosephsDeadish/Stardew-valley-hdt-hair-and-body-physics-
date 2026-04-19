@@ -14,9 +14,9 @@ OPTION A — Drag and Drop (simplest)
   1. This folder ("SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More")
      must contain:
        manifest.json
-       StardewHdtPhysics.dll
+       SVPPhysics.dll
        assets/
-  2. If StardewHdtPhysics.dll is missing, download a release build from
+  2. If SVPPhysics.dll is missing, download a release build from
      Nexus Mods or build from source using the included build scripts.
   3. Copy the entire folder into:
        Windows:  C:\Program Files (x86)\Steam\steamapps\common\Stardew Valley\Mods\

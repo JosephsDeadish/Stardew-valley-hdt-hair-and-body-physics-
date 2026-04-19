@@ -59,15 +59,15 @@ fi
 echo ""
 echo "==> Staging mod folder ..."
 
-DLL_SRC="$PROJECT_DIR/bin/Release/net6.0/StardewHdtPhysics.dll"
+DLL_SRC="$PROJECT_DIR/bin/Release/net6.0/SVPPhysics.dll"
 if [[ ! -f "$DLL_SRC" ]]; then
     echo "ERROR: DLL not found at: $DLL_SRC  (did the build succeed?)"
     exit 1
 fi
 
 # Copy DLL into the mod template folder so it's complete for drag-and-drop
-cp "$DLL_SRC" "$MOD_DIR/StardewHdtPhysics.dll"
-echo "  DLL  → $MOD_DIR/StardewHdtPhysics.dll"
+cp "$DLL_SRC" "$MOD_DIR/SVPPhysics.dll"
+echo "  DLL  → $MOD_DIR/SVPPhysics.dll"
 
 # Sync assets and manifest from source
 cp "$PROJECT_DIR/assets/"*.json "$MOD_DIR/assets/"

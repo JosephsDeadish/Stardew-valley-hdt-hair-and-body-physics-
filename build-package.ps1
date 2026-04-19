@@ -74,7 +74,7 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host ""
 Write-Host "==> Staging mod folder ..." -ForegroundColor Cyan
 
-$dllSrc = Join-Path $ProjectDir "bin\Release\net6.0\StardewHdtPhysics.dll"
+$dllSrc = Join-Path $ProjectDir "bin\Release\net6.0\SVPPhysics.dll"
 if (-not (Test-Path $dllSrc)) {
     Write-Error "DLL not found at: $dllSrc  (did the build succeed?)"
     exit 1
@@ -82,7 +82,7 @@ if (-not (Test-Path $dllSrc)) {
 
 # Copy DLL into the mod template folder so it's complete for drag-and-drop
 Copy-Item $dllSrc $ModDir -Force
-Write-Host "  DLL  → $ModDir\StardewHdtPhysics.dll"
+Write-Host "  DLL  → $ModDir\SVPPhysics.dll"
 
 # Sync assets from source (keeps the mod folder up-to-date with any asset edits)
 Copy-Item (Join-Path $ProjectDir "assets\*.json") (Join-Path $ModDir "assets") -Force
