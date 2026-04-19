@@ -1700,7 +1700,7 @@ public sealed class ModEntry : Mod
     /// Pig = sniff-bob, Ostrich = neck sway. All animals ambient-sway when no type matches.
     /// Only fires when nearly stationary (low velocity).
     /// </summary>
-    private void SimulateFarmAnimalIdle(StardewValley.Characters.FarmAnimal animal)
+    private void SimulateFarmAnimalIdle(FarmAnimal animal)
     {
         if (!this.config.EnableFarmAnimalPhysics) return;
 
