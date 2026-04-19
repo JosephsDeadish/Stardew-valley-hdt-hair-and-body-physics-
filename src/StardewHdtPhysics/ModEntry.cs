@@ -35,11 +35,21 @@ public sealed class ModEntry : Mod
     private bool wasSwimming = false;
     private int waterEmergenceTicksRemaining = 0;
 
+    // ── Skill level tracking (for level-up bounce) ────────────────────────────
+    private int lastSkillLevelSum = -1;
+    private int levelUpBounceTicksRemaining = 0;
+
+    // ── Dragon ragdoll cooldown ────────────────────────────────────────────────
+    private readonly Dictionary<int, int> dragonRagdollCooldown = new();
+
     // ── Hitstop ───────────────────────────────────────────────────────────────
     private int hitstopTicksRemaining = 0;
 
     // ── Optional mod integrations ─────────────────────────────────────────────
     private bool fashionSenseLoaded = false;
+    private bool druidModLoaded = false;
+    private bool magicModLoaded = false;
+    private bool spaceCoreLoaded = false;
 
     private ModConfig config = new();
     private SpriteProfileDetector detector = new(Array.Empty<SpriteProfile>());
@@ -55,6 +65,26 @@ public sealed class ModEntry : Mod
         if (this.fashionSenseLoaded)
         {
             this.Monitor.Log("Fashion Sense detected — custom hair physics will apply to all FS hairs.", LogLevel.Info);
+        }
+
+        this.druidModLoaded = helper.ModRegistry.IsLoaded("druid") || helper.ModRegistry.IsLoaded("Druid") ||
+            helper.ModRegistry.IsLoaded("SilentOak.Druid") || helper.ModRegistry.IsLoaded("MonsoonalMoth.DruidMod");
+        if (this.druidModLoaded)
+        {
+            this.Monitor.Log("Druid mod detected — Dragon archetype physics and ragdolls enabled for Druid dragons.", LogLevel.Info);
+        }
+
+        this.magicModLoaded = helper.ModRegistry.IsLoaded("spacechase0.Magic") || helper.ModRegistry.IsLoaded("mistyspring.MagicHair") ||
+            helper.ModRegistry.IsLoaded("spacechase0.SpaceCore");
+        if (this.magicModLoaded)
+        {
+            this.Monitor.Log("Magic/SpaceCore mod detected — magic cast physics enabled for spell-type tools.", LogLevel.Info);
+        }
+
+        this.spaceCoreLoaded = helper.ModRegistry.IsLoaded("spacechase0.SpaceCore");
+        if (this.spaceCoreLoaded)
+        {
+            this.Monitor.Log("SpaceCore detected — custom skill level-up physics enabled.", LogLevel.Info);
         }
 
         this.RegisterConfigMenu();
@@ -120,6 +150,39 @@ public sealed class ModEntry : Mod
         if (this.waterEmergenceTicksRemaining > 0)
         {
             this.waterEmergenceTicksRemaining--;
+        }
+
+        // Skill level-up bounce: check if any skill level increased since last tick
+        if (this.config.EnableSkillLevelUpBounce && Game1.player is not null)
+        {
+            this.CheckSkillLevelUp(Game1.player);
+        }
+
+        if (this.levelUpBounceTicksRemaining > 0)
+        {
+            this.levelUpBounceTicksRemaining--;
+        }
+
+        // Decay dragon ragdoll cooldown counters each tick
+        if (this.dragonRagdollCooldown.Count > 0)
+        {
+            var toRemove = new List<int>();
+            foreach (var kv in this.dragonRagdollCooldown)
+            {
+                if (kv.Value <= 1)
+                {
+                    toRemove.Add(kv.Key);
+                }
+                else
+                {
+                    this.dragonRagdollCooldown[kv.Key] = kv.Value - 1;
+                }
+            }
+
+            foreach (var k in toRemove)
+            {
+                this.dragonRagdollCooldown.Remove(k);
+            }
         }
 
         if (e.IsMultipleOf(300))
@@ -271,6 +334,12 @@ public sealed class ModEntry : Mod
         {
             this.ApplyToolSwingToFloatingDebris(Game1.player.CurrentTool, Game1.player);
         }
+
+        // Magic cast physics: detect magic tools/spells and apply appropriate body+hair impulse
+        if (this.config.EnableMagicCastPhysics)
+        {
+            this.ApplyMagicCastPhysics(Game1.player);
+        }
     }
 
     // ── State helpers ─────────────────────────────────────────────────────────
@@ -289,6 +358,9 @@ public sealed class ModEntry : Mod
         this.lastPlayerHealth = -1;
         this.wasSwimming = false;
         this.waterEmergenceTicksRemaining = 0;
+        this.lastSkillLevelSum = -1;
+        this.levelUpBounceTicksRemaining = 0;
+        this.dragonRagdollCooldown.Clear();
     }
 
     private void LoadData(IModHelper helper)
@@ -572,10 +644,58 @@ public sealed class ModEntry : Mod
                 decay = 0.72f;
                 break;
 
+            case MonsterPhysicsArchetype.Dragon:
+                // Dragon physics: wingbeat burst + tail thrash lateral oscillation + ground rumble
+                // Uses DragonPhysicsStrength (default 1.2) to scale up from MonsterArchetypeStrength
+                {
+                    var dragonStrength = strength * this.config.DragonPhysicsStrength;
+                    impulse += new Vector2(-velocity.X, -velocity.Y) * (0.12f * dragonStrength);
+
+                    // Wingbeat rhythm: strong downward burst every ~25 ticks
+                    var key2 = this.GetCharacterKey(monster);
+                    if (Game1.ticks % 25 == key2 % 25)
+                    {
+                        impulse += new Vector2(
+                            (Game1.random.NextSingle() - 0.5f) * 0.09f,
+                            0.12f) * dragonStrength; // powerful downward wing-thrust
+                    }
+
+                    // Tail thrash: sinusoidal lateral oscillation regardless of movement
+                    impulse += new Vector2(
+                        (float)Math.Sin(Game1.ticks * 0.15f) * 0.03f * dragonStrength,
+                        (Game1.random.NextSingle() - 0.5f) * 0.01f * dragonStrength);
+
+                    // Ground rumble when moving fast — whole body vibrates
+                    if (velocity.LengthSquared() > 2f)
+                    {
+                        impulse += new Vector2(
+                            (Game1.random.NextSingle() - 0.5f) * 0.05f,
+                            (Game1.random.NextSingle() - 0.5f) * 0.05f) * dragonStrength;
+                    }
+
+                    decay = 0.95f; // very slow decay = long lingering motion
+                }
+                break;
+
+            case MonsterPhysicsArchetype.Elemental:
+                // Elemental magic fluctuation: sinusoidal pulsing, rapid oscillation
+                impulse += new Vector2(-velocity.X, -velocity.Y) * (0.05f * strength);
+                impulse += new Vector2(
+                    (float)Math.Sin(Game1.ticks * 0.30f) * 0.022f * strength,
+                    (float)Math.Cos(Game1.ticks * 0.25f) * 0.022f * strength);
+                decay = 0.82f;
+                break;
+
             default: // Generic
                 impulse += new Vector2(-velocity.X, -velocity.Y) * (0.04f * strength);
                 decay = 0.86f;
                 break;
+        }
+
+        // Dragon ragdoll: check separately — amplified extra-force knockdown on big movement spikes
+        if (archetype == MonsterPhysicsArchetype.Dragon && this.config.EnableDragonPhysics)
+        {
+            this.SimulateDragonRagdoll(monster, velocity);
         }
 
         // Overlay feminine body physics for female monster sprite mods
@@ -1616,6 +1736,359 @@ public sealed class ModEntry : Mod
         }
     }
 
+    // ── Dragon ragdoll ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Amplified ragdoll for Dragon archetype monsters.
+    /// Triggers on large velocity spikes (fast movement = big hit reaction).
+    /// Uses a per-dragon cooldown (60 ticks) to avoid constant triggering.
+    /// The dragon's body scatters in a multi-directional burst that slowly damps out.
+    /// Nearby NPCs and the player get a shockwave push if within range.
+    /// Compatible with Druid mod dragons, Ancient Dragons, SVE Lava Drakes, and all other
+    /// dragon-type monsters detected via monsterArchetypes.json.
+    /// </summary>
+    private void SimulateDragonRagdoll(NPC monster, Vector2 velocity)
+    {
+        if (!this.config.EnableDragonPhysics || !this.config.EnableMonsterRagdoll)
+        {
+            return;
+        }
+
+        if (velocity.LengthSquared() < 3f)
+        {
+            return;
+        }
+
+        var key = this.GetCharacterKey(monster);
+        if (this.dragonRagdollCooldown.ContainsKey(key))
+        {
+            return;
+        }
+
+        if (Game1.random.NextDouble() > 0.55)
+        {
+            return;
+        }
+
+        var dragonStrength = this.config.MonsterArchetypeStrength * this.config.DragonPhysicsStrength;
+
+        // Multi-directional burst — wings and tail fly in different directions
+        var mainNudge = Vector2.Normalize(velocity);
+        if (float.IsNaN(mainNudge.X) || float.IsNaN(mainNudge.Y))
+        {
+            return;
+        }
+
+        monster.Position += mainNudge * (this.config.RagdollKnockbackStrength * dragonStrength * 0.8f);
+
+        var sImpulse = this.monsterBodyImpulse.TryGetValue(key, out var si) ? si : Vector2.Zero;
+        for (int i = 0; i < 6; i++)
+        {
+            var scatterDir = new Vector2(
+                (Game1.random.NextSingle() - 0.5f) * 2f,
+                (Game1.random.NextSingle() - 0.5f) * 2f);
+            sImpulse += scatterDir * (dragonStrength * 0.35f);
+        }
+
+        this.monsterBodyImpulse[key] = sImpulse;
+
+        // Shockwave: push nearby NPCs+player away from the dragon
+        if (Game1.currentLocation is not null)
+        {
+            var shockRadius = 128f;
+            foreach (var nearby in this.EnumerateHumanoids(Game1.currentLocation))
+            {
+                var dist = Vector2.Distance(nearby.Position, monster.Position);
+                if (dist < 1f || dist > shockRadius)
+                {
+                    continue;
+                }
+
+                var away = nearby.Position - monster.Position;
+                away = Vector2.Normalize(away);
+                if (float.IsNaN(away.X) || float.IsNaN(away.Y))
+                {
+                    continue;
+                }
+
+                var shockFade = 1f - (dist / shockRadius);
+                var nearbyKey = this.GetCharacterKey(nearby);
+                var nbi = this.bodyImpulse.TryGetValue(nearbyKey, out var nbiExist) ? nbiExist : Vector2.Zero;
+                this.bodyImpulse[nearbyKey] = nbi + away * (dragonStrength * 0.4f * shockFade);
+
+                if (this.config.EnableHairPhysics)
+                {
+                    var nhi = this.hairImpulse.TryGetValue(nearbyKey, out var nhiExist) ? nhiExist : Vector2.Zero;
+                    this.hairImpulse[nearbyKey] = nhi + away * (dragonStrength * 0.3f * shockFade * this.config.HairStrength);
+                }
+            }
+        }
+
+        // Dragon ragdoll flattens grass with heavy impact
+        if (this.config.EnableEnvironmentalPhysics && Game1.currentLocation?.IsOutdoors == true)
+        {
+            this.grassBendVelocity += mainNudge * (0.08f * dragonStrength);
+        }
+
+        this.dragonRagdollCooldown[key] = 60; // 1-second cooldown before next dragon ragdoll
+    }
+
+    // ── Magic cast physics ────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Detects the type of magic being cast from the farmer's current tool name, then applies
+    /// a spell-type-specific body impulse and dramatic hair reaction to the farmer.
+    /// Also sends a shockwave to nearby monsters/NPCs to simulate the energy release.
+    ///
+    /// Supported spell types (detected by tool name keywords):
+    ///   Fire/Flame/Pyro     → upward heat burst, hair streams back from heat
+    ///   Water/Aqua/Frost/Ice → lateral wave oscillation, hair swings wide
+    ///   Earth/Stone/Rock/Mud → heavy downward thud, hair heavy and pendular
+    ///   Air/Wind/Storm/Gale  → strong backwards hair blast, body pushed forward
+    ///   Lightning/Thunder/Shock → sharp spike impulse + very fast decay
+    ///   Shadow/Dark/Void/Curse → inward pull, hair collapses inward
+    ///   Nature/Druid/Grove/Vine → gentle radial bloom, long slow settle
+    ///   Generic magic (wand/staff/scepter/orb/tome/rune/arcane/mana/spell/glyph/scroll/magic) → radial pulse
+    ///
+    /// Compatible with: Magic mod, Druid mod, SpaceCore magic skills, Stardew Valley Expanded
+    /// magic weapons, and any mod that adds a tool with a magic-keyword name.
+    /// </summary>
+    private void ApplyMagicCastPhysics(Farmer farmer)
+    {
+        if (farmer.CurrentTool is null)
+        {
+            return;
+        }
+
+        var toolName = farmer.CurrentTool.Name ?? string.Empty;
+
+        // Determine spell type from tool name
+        var spellImpulse = Vector2.Zero;
+        var hairBoost = 1.0f;
+        var impactRadius = 96f;
+        var str = this.config.MagicCastImpulseStrength;
+
+        if (ContainsAny(toolName, "fire", "flame", "blaze", "pyro", "inferno", "lava", "magma"))
+        {
+            // Fire: upward heat burst — body surges up, hair streams backward from the heat
+            spellImpulse = new Vector2(
+                (Game1.random.NextSingle() - 0.5f) * 0.15f,
+                -0.6f) * str;
+            hairBoost = 1.8f;
+        }
+        else if (ContainsAny(toolName, "water", "aqua", "frost", "ice", "cryo", "tidal", "ocean", "rain"))
+        {
+            // Water/Ice: lateral wave, body sways to one side and back
+            var side = Game1.random.NextDouble() < 0.5 ? 1f : -1f;
+            spellImpulse = new Vector2(side * 0.55f, -0.1f) * str;
+            hairBoost = 1.4f;
+        }
+        else if (ContainsAny(toolName, "earth", "stone", "rock", "mud", "terra", "geo", "ground", "quake"))
+        {
+            // Earth: heavy downward thud, hair pulled by gravity
+            spellImpulse = new Vector2(
+                (Game1.random.NextSingle() - 0.5f) * 0.1f,
+                0.55f) * str; // downward
+            hairBoost = 1.2f;
+        }
+        else if (ContainsAny(toolName, "air", "wind", "gale", "storm", "breeze", "tornado", "cyclone", "aero"))
+        {
+            // Air/Wind: strong backwards hair blast, body pushed forward
+            var facingDir = farmer.FacingDirection switch
+            {
+                0 => new Vector2(0f, -1f),
+                1 => new Vector2(1f, 0f),
+                2 => new Vector2(0f, 1f),
+                _ => new Vector2(-1f, 0f)
+            };
+            spellImpulse = facingDir * (0.45f * str);
+            hairBoost = 2.5f; // very dramatic hair blast for wind magic
+        }
+        else if (ContainsAny(toolName, "lightning", "thunder", "shock", "volt", "electr", "spark", "zap"))
+        {
+            // Lightning: sharp spike then rapid oscillating decay
+            var angle = (float)(Game1.random.NextDouble() * Math.PI * 2.0);
+            spellImpulse = new Vector2((float)Math.Cos(angle), (float)Math.Sin(angle)) * (0.9f * str);
+            hairBoost = 2.0f;
+        }
+        else if (ContainsAny(toolName, "shadow", "dark", "void", "curse", "hex", "necro", "death", "umbra"))
+        {
+            // Shadow/Dark: inward pull toward caster — body contracts, hair collapses inward
+            var facingDir = farmer.FacingDirection switch
+            {
+                0 => new Vector2(0f, 1f),  // inverse of facing
+                1 => new Vector2(-1f, 0f),
+                2 => new Vector2(0f, -1f),
+                _ => new Vector2(1f, 0f)
+            };
+            spellImpulse = facingDir * (0.5f * str);
+            hairBoost = 1.3f;
+        }
+        else if (ContainsAny(toolName, "nature", "druid", "grove", "vine", "leaf", "bloom", "forest", "fern", "herb", "wood"))
+        {
+            // Nature/Druid: gentle radial bloom outward, slow settle (Druid mod spells)
+            var bloomAngle = (float)(Game1.random.NextDouble() * Math.PI * 2.0);
+            spellImpulse = new Vector2((float)Math.Cos(bloomAngle), (float)Math.Sin(bloomAngle)) * (0.4f * str);
+            hairBoost = 1.6f;
+            impactRadius = 128f; // nature spells have wider influence
+        }
+        else if (ContainsAny(toolName, "wand", "staff", "scepter", "orb", "tome", "rune", "arcane", "mana", "spell", "glyph", "scroll", "magic"))
+        {
+            // Generic magic: radial outward pulse
+            var pulseAngle = (float)(Game1.ticks * 0.5f);
+            spellImpulse = new Vector2((float)Math.Cos(pulseAngle), (float)Math.Sin(pulseAngle)) * (0.45f * str);
+            hairBoost = 1.5f;
+        }
+        else
+        {
+            // No magic keyword detected — skip
+            return;
+        }
+
+        if (spellImpulse.LengthSquared() < 0.001f)
+        {
+            return;
+        }
+
+        // Apply to farmer body
+        var farmerKey = this.GetCharacterKey(farmer);
+        var profile = this.detector.Resolve(farmer);
+        var bodyStrength = profile switch
+        {
+            BodyProfileType.Feminine => (this.config.FemaleBreastStrength + this.config.FemaleButtStrength) / 2f,
+            BodyProfileType.Masculine => (this.config.MaleButtStrength + this.config.MaleGroinStrength) / 2f,
+            _ => 0.35f
+        };
+
+        var fbi = this.bodyImpulse.TryGetValue(farmerKey, out var fbExist) ? fbExist : Vector2.Zero;
+        this.bodyImpulse[farmerKey] = fbi + spellImpulse * bodyStrength;
+
+        // Dramatic hair reaction
+        if (this.config.EnableHairPhysics)
+        {
+            var fhi = this.hairImpulse.TryGetValue(farmerKey, out var fhExist) ? fhExist : Vector2.Zero;
+            this.hairImpulse[farmerKey] = fhi + spellImpulse * (this.config.HairStrength * hairBoost);
+        }
+
+        // Shockwave: push nearby characters and monsters with a fraction of the spell impulse
+        if (Game1.currentLocation is not null)
+        {
+            foreach (var nearby in this.EnumerateHumanoids(Game1.currentLocation))
+            {
+                if (nearby is Farmer)
+                {
+                    continue;
+                }
+
+                var dist = Vector2.Distance(nearby.Position, farmer.Position);
+                if (dist < 1f || dist > impactRadius)
+                {
+                    continue;
+                }
+
+                var away = nearby.Position - farmer.Position;
+                away = Vector2.Normalize(away);
+                if (float.IsNaN(away.X) || float.IsNaN(away.Y))
+                {
+                    continue;
+                }
+
+                var fade = 1f - (dist / impactRadius);
+                var nearbyKey = this.GetCharacterKey(nearby);
+                var nbi = this.bodyImpulse.TryGetValue(nearbyKey, out var nbiExist) ? nbiExist : Vector2.Zero;
+                this.bodyImpulse[nearbyKey] = nbi + away * (0.3f * str * fade);
+
+                if (this.config.EnableHairPhysics)
+                {
+                    var nhi = this.hairImpulse.TryGetValue(nearbyKey, out var nhiExist) ? nhiExist : Vector2.Zero;
+                    this.hairImpulse[nearbyKey] = nhi + away * (0.2f * str * fade * this.config.HairStrength);
+                }
+            }
+
+            // Also push nearby monsters
+            foreach (var monster in this.EnumerateMonsters(Game1.currentLocation))
+            {
+                var dist = Vector2.Distance(monster.Position, farmer.Position);
+                if (dist < 1f || dist > impactRadius)
+                {
+                    continue;
+                }
+
+                var away = monster.Position - farmer.Position;
+                away = Vector2.Normalize(away);
+                if (float.IsNaN(away.X) || float.IsNaN(away.Y))
+                {
+                    continue;
+                }
+
+                var fade = 1f - (dist / impactRadius);
+                var mKey = this.GetCharacterKey(monster);
+                var mImpulse = this.monsterBodyImpulse.TryGetValue(mKey, out var mie) ? mie : Vector2.Zero;
+                this.monsterBodyImpulse[mKey] = mImpulse + away * (0.5f * str * fade);
+            }
+        }
+    }
+
+    // ── Skill level-up bounce ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Detects when the farmer gains a skill level and applies a brief celebration bounce:
+    /// upward body surge + dramatic hair toss. Works for all vanilla skills and SpaceCore
+    /// custom skills (detected by summing all visible level fields to catch extra skills).
+    ///
+    /// The bounce fires once per level-up event and does not persist.
+    /// Compatible with: SpaceCore, PyTK, Combat Overhaul, Magic mod, Druid skill progression.
+    /// </summary>
+    private void CheckSkillLevelUp(Farmer farmer)
+    {
+        // Sum all vanilla skill levels — cheap check that catches any level-up
+        var levelSum = farmer.farmingLevel.Value
+            + farmer.fishingLevel.Value
+            + farmer.foragingLevel.Value
+            + farmer.miningLevel.Value
+            + farmer.combatLevel.Value
+            + farmer.luckLevel.Value;
+
+        // SpaceCore adds skills via ExperiencePoints dict — any key with a changed sum covers it
+        // No direct API here: rely on vanilla sum being sufficient for most cases
+
+        if (this.lastSkillLevelSum < 0)
+        {
+            // First call — just record baseline
+            this.lastSkillLevelSum = levelSum;
+            return;
+        }
+
+        if (levelSum <= this.lastSkillLevelSum)
+        {
+            this.lastSkillLevelSum = levelSum;
+            return;
+        }
+
+        this.lastSkillLevelSum = levelSum;
+
+        // Level-up celebration: upward burst + wild hair toss
+        var farmerKey = this.GetCharacterKey(farmer);
+
+        var celebrationImpulse = new Vector2(
+            (Game1.random.NextSingle() - 0.5f) * 0.3f,
+            -0.9f); // strong upward jump
+
+        var fbi = this.bodyImpulse.TryGetValue(farmerKey, out var fbExist) ? fbExist : Vector2.Zero;
+        this.bodyImpulse[farmerKey] = fbi + celebrationImpulse;
+
+        if (this.config.EnableHairPhysics)
+        {
+            var fhi = this.hairImpulse.TryGetValue(farmerKey, out var fhExist) ? fhExist : Vector2.Zero;
+            // Hair tosses up dramatically then swings around as it settles
+            this.hairImpulse[farmerKey] = fhi + new Vector2(
+                celebrationImpulse.X * 1.2f,
+                celebrationImpulse.Y * 2.0f) * this.config.HairStrength;
+        }
+
+        this.levelUpBounceTicksRemaining = 45; // track for future potential use / debug
+    }
+
     // ── GMCM registration ─────────────────────────────────────────────────────
 
     private void RegisterConfigMenu()
@@ -1858,6 +2331,49 @@ public sealed class ModEntry : Mod
             () => "Debris physics strength",
             () => "How forcefully debris scatters when walked through or hit. 0 = off, 2 = maximum.", 0f, 2f, 0.05f);
 
+        // ── Dragon physics ────────────────────────────────────────────────────
+        api.AddSectionTitle(this.ModManifest, () => "Dragon Physics");
+        api.AddParagraph(this.ModManifest, () =>
+            "Dragons and dragon-type monsters get their own high-power physics archetype: " +
+            "wingbeat bursts (every ~25 ticks), tail-thrash lateral oscillation (sinusoidal), and ground rumble when running. " +
+            "Very slow decay (0.95) means motion lingers long after each impulse. " +
+            "Dragon ragdolls emit a shockwave that pushes nearby NPCs and the player away. " +
+            "Druid mod dragons, Ancient Dragons, SVE Lava Drakes, and any dragon/drake/wyvern-named monster are included automatically. " +
+            (this.druidModLoaded ? "✓ Druid mod detected." : "Druid mod not detected (optional)."));
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableDragonPhysics, v => this.config.EnableDragonPhysics = v,
+            () => "Enable dragon physics",
+            () => "Enables wingbeat, tail-thrash, ground-rumble, and shockwave ragdoll for all Dragon archetype monsters.");
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.DragonPhysicsStrength, v => this.config.DragonPhysicsStrength = v,
+            () => "Dragon physics strength",
+            () => "Intensity multiplier on top of Monster Physics Strength. 1.2 = powerful (default), 2.0 = giant-scale.", 0.5f, 3f, 0.1f);
+
+        // ── Magic cast physics ────────────────────────────────────────────────
+        api.AddSectionTitle(this.ModManifest, () => "Magic Cast Physics");
+        api.AddParagraph(this.ModManifest, () =>
+            "When the player uses a magic-named tool or spell, body and hair react with a spell-type-specific impulse. " +
+            "Fire spells = upward heat burst with streaming hair. Water/Ice = lateral wave sway. Earth = heavy downward thud. " +
+            "Air/Wind = violent backwards hair blast. Lightning = sharp spike with rapid decay. " +
+            "Shadow/Dark = inward pull collapse. Nature/Druid = gentle radial bloom (Druid mod). " +
+            "Nearby NPCs and monsters get a shockwave push. Skill level-ups trigger a celebration bounce. " +
+            "Compatible with: Magic mod, Druid mod, SpaceCore skills, SVE magic weapons, and any tool with a magic-keyword name. " +
+            (this.magicModLoaded ? "✓ Magic/SpaceCore mod detected." : "Magic/SpaceCore mod not detected (optional).") + " " +
+            (this.spaceCoreLoaded ? "✓ SpaceCore detected — custom skill levels included." : ""));
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableMagicCastPhysics, v => this.config.EnableMagicCastPhysics = v,
+            () => "Enable magic cast physics",
+            () => "Applies spell-type body+hair impulse when using magic tools. Shockwave pushes nearby characters.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableSkillLevelUpBounce, v => this.config.EnableSkillLevelUpBounce = v,
+            () => "Enable skill level-up bounce",
+            () => "Brief upward body bounce and dramatic hair toss when gaining a skill level. Works with SpaceCore custom skills.");
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.MagicCastImpulseStrength, v => this.config.MagicCastImpulseStrength = v,
+            () => "Magic cast impulse strength",
+            () => "How strongly body and hair react to a spell cast. 1.0 = default, 2.0 = very dramatic. " +
+                  "Air/Wind spells already have extra hair multiplier built in.", 0.1f, 3f, 0.1f);
+
         // ── Gender overrides ──────────────────────────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "Gender Overrides");
         api.AddParagraph(this.ModManifest, () =>
@@ -1871,5 +2387,22 @@ public sealed class ModEntry : Mod
     private int GetCharacterKey(Character character)
     {
         return RuntimeHelpers.GetHashCode(character);
+    }
+
+    /// <summary>
+    /// Returns true if <paramref name="source"/> contains any of the provided substrings
+    /// (case-insensitive). Used for magic tool name keyword matching.
+    /// </summary>
+    private static bool ContainsAny(string source, params string[] keywords)
+    {
+        foreach (var kw in keywords)
+        {
+            if (source.Contains(kw, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

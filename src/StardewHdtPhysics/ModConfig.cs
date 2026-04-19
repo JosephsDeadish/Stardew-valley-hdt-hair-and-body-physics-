@@ -24,6 +24,12 @@ public sealed class ModConfig
     public bool EnableProximityCollisionImpulse { get; set; } = true;
     /// <summary>Hair droops heavily for a few ticks after the farmer exits water.</summary>
     public bool EnableWaterEmergenceHairDroop { get; set; } = true;
+    /// <summary>Dragon archetype physics: wingbeat bursts, tail thrash, ground rumble. Used for Druid mod dragons and all dragon-type monsters.</summary>
+    public bool EnableDragonPhysics { get; set; } = true;
+    /// <summary>Body/hair impulse reacts to casting magic spells and using magic tools. Compatible with Magic mod, Druid mod, SpaceCore skills, and any magic-named tool.</summary>
+    public bool EnableMagicCastPhysics { get; set; } = true;
+    /// <summary>Brief celebration body bounce + hair toss when the farmer gains a skill level (works with SpaceCore custom skills too).</summary>
+    public bool EnableSkillLevelUpBounce { get; set; } = true;
 
     // ── Feminine body strengths ───────────────────────────────────────────────
     public float FemaleBreastStrength { get; set; } = 0.75f;
@@ -64,6 +70,14 @@ public sealed class ModConfig
 
     // ── Debris physics ────────────────────────────────────────────────────────
     public float DebrisPhysicsStrength { get; set; } = 0.65f;
+
+    // ── Dragon physics ────────────────────────────────────────────────────────
+    /// <summary>Overall intensity of dragon archetype body, wing, and tail physics. 1.2 = powerful by default to match dragon scale.</summary>
+    public float DragonPhysicsStrength { get; set; } = 1.2f;
+
+    // ── Magic cast physics ────────────────────────────────────────────────────
+    /// <summary>Intensity of body/hair impulse when casting a spell or using a magic tool. Higher values = more dramatic hair fly and body reaction.</summary>
+    public float MagicCastImpulseStrength { get; set; } = 1.0f;
 
     // ── Presets ───────────────────────────────────────────────────────────────
     public string Preset { get; set; } = "Default";

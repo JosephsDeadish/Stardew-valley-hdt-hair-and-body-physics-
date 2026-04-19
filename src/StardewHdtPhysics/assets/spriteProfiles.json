@@ -32,6 +32,16 @@
   { "CharacterName": "",          "SpriteTextureContains": "fashionsense",  "ProfileType": "Androgynous" },
   { "CharacterName": "",          "SpriteTextureContains": "fashion_sense", "ProfileType": "Androgynous" },
 
+  { "CharacterName": "",          "SpriteTextureContains": "druid",         "ProfileType": "Androgynous" },
+  { "CharacterName": "",          "SpriteTextureContains": "druidmod",      "ProfileType": "Androgynous" },
+  { "CharacterName": "",          "SpriteTextureContains": "druid_mod",     "ProfileType": "Androgynous" },
+  { "CharacterName": "",          "SpriteTextureContains": "magicmod",      "ProfileType": "Androgynous" },
+  { "CharacterName": "",          "SpriteTextureContains": "magic_mod",     "ProfileType": "Androgynous" },
+  { "CharacterName": "",          "SpriteTextureContains": "arcane",        "ProfileType": "Androgynous" },
+  { "CharacterName": "",          "SpriteTextureContains": "spellcraft",    "ProfileType": "Androgynous" },
+  { "CharacterName": "",          "SpriteTextureContains": "spacecore",     "ProfileType": "Androgynous" },
+  { "CharacterName": "",          "SpriteTextureContains": "spacecoremod",  "ProfileType": "Androgynous" },
+
   { "CharacterName": "",          "SpriteTextureContains": "ridgesidevillage",  "ProfileType": "Androgynous" },
   { "CharacterName": "",          "SpriteTextureContains": "ridgeside_village", "ProfileType": "Androgynous" },
   { "CharacterName": "Aguar",     "SpriteTextureContains": "", "ProfileType": "Masculine" },

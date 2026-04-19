@@ -10,7 +10,9 @@ public enum BodyProfileType
 /// <summary>
 /// Physics archetype for monsters.  Determines which impulse model is applied:
 /// Slime=bouncy jello, Bat=floppy wings, Worm=squishy/stretchy,
-/// FlyingBug=wing+leg vibration, Furry=fur ripple, Skeleton=snappy bones, Generic=standard.
+/// FlyingBug=wing+leg vibration, Furry=fur ripple, Skeleton=snappy bones,
+/// Dragon=massive wing-beat + tail thrash + ground rumble (very slow decay),
+/// Elemental=sinusoidal magical energy pulsing (moderate fast decay), Generic=standard.
 /// </summary>
 public enum MonsterPhysicsArchetype
 {
@@ -20,7 +22,19 @@ public enum MonsterPhysicsArchetype
     Worm,
     FlyingBug,
     Furry,
-    Skeleton
+    Skeleton,
+    /// <summary>
+    /// Large-body physics: wingbeat bursts, tail-thrash lateral oscillation, ground-rumble
+    /// when running. Very slow decay (0.95) gives long lingering motion after each impulse.
+    /// Used for Druid mod dragons, Ancient Dragons, Wyverns, Drake variants.
+    /// </summary>
+    Dragon,
+    /// <summary>
+    /// Magical energy fluctuation: sinusoidal pulsing impulse, rapid oscillation, moderate
+    /// fast decay. Used for fire/water/earth/air/shadow elementals, magical constructs,
+    /// Prismatic Slime variants, and spell-projected creatures from magic skill mods.
+    /// </summary>
+    Elemental
 }
 
 /// <summary>
