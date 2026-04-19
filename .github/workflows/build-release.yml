@@ -53,17 +53,21 @@ jobs:
       # ── 3. SteamCMD + Stardew Valley ─────────────────────────────────────────
       - name: Install SteamCMD
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            lib32gcc-s1 \
-            lib32stdc++6 \
-            libc6-i386
-          sudo mkdir -p /usr/games
-          curl -sqL "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz" \
-            | sudo tar xz -C /usr/games
-          sudo chmod +x /usr/games/steamcmd.sh
-          sudo chmod +x /usr/games/linux32/steamcmd
-          echo "SteamCMD installed at /usr/games/steamcmd.sh"
+          for attempt in 1 2 3; do
+            echo "Attempt $attempt to install SteamCMD..."
+            sudo apt-get update -qq && \
+            sudo apt-get install -y --no-install-recommends \
+              lib32gcc-s1 \
+              lib32stdc++6 \
+              libc6-i386 && \
+            sudo mkdir -p /usr/games && \
+            curl -sqL "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz" \
+              | sudo tar xz -C /usr/games && \
+            sudo chmod +x /usr/games/steamcmd.sh && \
+            sudo chmod +x /usr/games/linux32/steamcmd && \
+            echo "SteamCMD installed at /usr/games/steamcmd.sh" && \
+            break || sleep 10
+          done
 
       - name: Download Stardew Valley via SteamCMD
         env:
@@ -75,20 +79,31 @@ jobs:
           STARDEW_DIR="$HOME/stardew"
           mkdir -p "$STARDEW_DIR"
 
-          if [ -n "${STEAM_GUARD:-}" ]; then
-            /usr/games/steamcmd.sh \
-              +@sSteamCmdForcePlatformType linux \
-              +login "$STEAM_USER" "$STEAM_PASS" "$STEAM_GUARD" \
-              +force_install_dir "$STARDEW_DIR" \
-              +app_update 413150 validate \
-              +quit
-          else
-            /usr/games/steamcmd.sh \
-              +@sSteamCmdForcePlatformType linux \
-              +login "$STEAM_USER" "$STEAM_PASS" \
-              +force_install_dir "$STARDEW_DIR" \
-              +app_update 413150 validate \
-              +quit
+          for attempt in 1 2 3; do
+            echo "Attempt $attempt to download Stardew Valley..."
+
+            if [ -n "${STEAM_GUARD:-}" ]; then
+              /usr/games/steamcmd.sh \
+                +@sSteamCmdForcePlatformType linux \
+                +login "$STEAM_USER" "$STEAM_PASS" "$STEAM_GUARD" \
+                +force_install_dir "$STARDEW_DIR" \
+                +app_update 413150 validate \
+                +quit && DOWNLOAD_SUCCESS=1 && break
+            else
+              /usr/games/steamcmd.sh \
+                +@sSteamCmdForcePlatformType linux \
+                +login "$STEAM_USER" "$STEAM_PASS" \
+                +force_install_dir "$STARDEW_DIR" \
+                +app_update 413150 validate \
+                +quit && DOWNLOAD_SUCCESS=1 && break
+            fi
+
+            sleep 10
+          done
+
+          if [ "${DOWNLOAD_SUCCESS:-}" != "1" ]; then
+            echo "ERROR: Failed to download Stardew Valley after 3 attempts"
+            exit 1
           fi
 
           echo "STARDEW_PATH=$STARDEW_DIR" >> "$GITHUB_ENV"
