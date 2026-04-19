@@ -180,6 +180,40 @@ public sealed class ModConfig
     /// </summary>
     public float WoodShatterIntensity { get; set; } = 1.0f;
 
+    // ── Typed physics debris ──────────────────────────────────────────────────
+    /// <summary>
+    /// Spawn visually distinct physics particles matching the broken material:
+    /// stone chunks (grey) for rocks/ore/geodes, wood splinters (brown) and sawdust (tan)
+    /// for trees and stumps. Particles arc under gravity, bounce once, scatter when the
+    /// player walks through them, and fade out after <see cref="TypedDebrisLifetimeTicks"/> ticks.
+    /// </summary>
+    public bool EnableTypedPhysicsDebris { get; set; } = true;
+
+    /// <summary>
+    /// Lifetime of typed debris particles in game ticks.
+    /// 1200 = 20 s, 1500 = 25 s (default), 1800 = 30 s.
+    /// Particles fade out over the final 25 % of their life.
+    /// </summary>
+    public int TypedDebrisLifetimeTicks { get; set; } = 1500;
+
+    /// <summary>
+    /// Strength of the scatter impulse when the player walks through typed debris particles.
+    /// 0 = particles are static (no walk-scatter), 1 = default push, 2 = very strong scatter.
+    /// </summary>
+    public float TypedDebrisScatterStrength { get; set; } = 1.0f;
+
+    /// <summary>
+    /// Apply a body/hair impulse to the player when a felled tree thuds on the ground,
+    /// simulating camera shake via the physics engine.
+    /// </summary>
+    public bool EnableTreeFallImpulse { get; set; } = true;
+
+    /// <summary>
+    /// Intensity of the player body/hair impulse on tree thud. 0 = off, 1 = default.
+    /// Scales with distance: trees further away produce a smaller impulse.
+    /// </summary>
+    public float TreeFallImpulseStrength { get; set; } = 1.0f;
+
     // ── Wing physics ──────────────────────────────────────────────────────────
     /// <summary>
     /// Multi-bone wing physics for all winged creatures: bats, dragons, flying bugs, butterflies,

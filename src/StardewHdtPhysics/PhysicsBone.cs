@@ -868,3 +868,64 @@ public sealed class AnimalBoneGroup
         for (int i = 0; i < AnimalBoneIdx.Count; i++) Bones[i].Reset();
     }
 }
+
+// ── Typed physics debris particles ───────────────────────────────────────────
+
+/// <summary>
+/// Material type of a typed physics particle.
+/// Controls its visual appearance (colour, size) and physical constants
+/// (gravity, drag, bounce coefficient).
+/// </summary>
+public enum PhysicsParticleKind
+{
+    /// <summary>Elongated brown chip expelled from wood impacts and tree falls.</summary>
+    WoodSplinter,
+    /// <summary>Tiny tan dot, heavy air drag, fast fade — sawdust clouds from cut wood.</summary>
+    Sawdust,
+    /// <summary>Grey square, heavier gravity, one-bounce — gravel/stone from rocks and geodes.</summary>
+    StoneChunk,
+    /// <summary>Warm copper/bronze tint — ore fragments from ore veins and geodes.</summary>
+    OreChunk,
+    /// <summary>Bright-blue tint, light — gem/crystal shards.</summary>
+    GemChunk,
+}
+
+/// <summary>
+/// A single typed physics debris particle.
+/// Simulates a parabolic arc with air resistance, a one-time bounce reaction,
+/// and gradual fade-out over its lifetime.
+/// All position/velocity values are in world-pixel coordinates (64 units = 1 tile).
+/// </summary>
+public sealed class TypedPhysicsParticle
+{
+    /// <summary>World-space position in pixels.</summary>
+    public Vector2 Position;
+
+    /// <summary>
+    /// Velocity in world-pixels per game tick.
+    /// Positive Y = downward (screen-space convention).
+    /// </summary>
+    public Vector2 Velocity;
+
+    /// <summary>Current spin angle in radians.</summary>
+    public float Rotation;
+
+    /// <summary>Spin rate in radians per tick; decays with air resistance.</summary>
+    public float RotationVelocity;
+
+    /// <summary>How many game ticks this particle has been alive.</summary>
+    public int AgeTicks;
+
+    /// <summary>Total lifetime in ticks before the particle is removed.</summary>
+    public int MaxAgeTicks;
+
+    /// <summary>Visual/physical type — determines colour, size, gravity, and drag.</summary>
+    public PhysicsParticleKind Kind;
+
+    /// <summary>
+    /// Set to <c>true</c> after the particle has already bounced once.
+    /// Prevents infinite multi-bounces.
+    /// </summary>
+    public bool HasBounced;
+}
+

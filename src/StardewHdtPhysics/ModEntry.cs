@@ -1,4 +1,5 @@
 using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework.Graphics;
 using System.Runtime.CompilerServices;
 using StardewModdingAPI;
 using StardewModdingAPI.Events;
@@ -64,6 +65,17 @@ public sealed class ModEntry : Mod
 
     // ── Dragon ragdoll cooldown ────────────────────────────────────────────────
     private readonly Dictionary<int, int> dragonRagdollCooldown = new();
+
+    // ── Typed physics debris particles ────────────────────────────────────────
+    /// Arcing, scatter-on-walk, material-typed debris particles (wood splinters, sawdust, stone chunks).
+    private readonly List<TypedPhysicsParticle> typedParticles = new();
+    private const int MaxTypedParticles = 300;  // hard cap to prevent lag on large maps
+
+    /// Tile positions of trees present last tick — used to detect tree-fell events.
+    private readonly HashSet<Point> prevTreeTiles = new();
+
+    /// 1×1 white Texture2D for particle rendering (lazily created on first render).
+    private Texture2D? pixelTexture;
 
     // ── Hitstop ───────────────────────────────────────────────────────────────
     private int hitstopTicksRemaining = 0;
@@ -166,8 +178,8 @@ public sealed class ModEntry : Mod
     private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
     {
         this.Monitor.Log("╔══════════════════════════════════════════════════════════════╗", LogLevel.Info);
-        this.Monitor.Log("║  SVP Physics, Collisions, Hitstops, Idles, Ragdolls — v0.7.0 ║", LogLevel.Info);
-        this.Monitor.Log("║  Multi-bone breast chain, nude/swap detection, monster mods.  ║", LogLevel.Info);
+        this.Monitor.Log("║  SVP Physics, Collisions, Hitstops, Idles, Ragdolls — v0.8.0 ║", LogLevel.Info);
+        this.Monitor.Log("║  Typed debris (stone/wood/sawdust), per-bone clothing mult.   ║", LogLevel.Info);
         this.Monitor.Log("╠══════════════════════════════════════════════════════════════╣", LogLevel.Info);
         this.Monitor.Log($"║  Body physics:           {(this.config.EnableBodyPhysics ? "ON " : "OFF")}", LogLevel.Info);
         this.Monitor.Log($"║  Hair physics (chain):   {(this.config.EnableHairPhysics ? "ON " : "OFF")} ({this.config.HairChainSegments} segments)", LogLevel.Info);
@@ -186,6 +198,7 @@ public sealed class ModEntry : Mod
         this.Monitor.Log($"║  Farm animal physics:    {(this.config.EnableFarmAnimalPhysics ? "ON " : "OFF")}", LogLevel.Info);
         this.Monitor.Log($"║  Environmental physics:  {(this.config.EnableEnvironmentalPhysics ? "ON " : "OFF")}", LogLevel.Info);
         this.Monitor.Log($"║  Debris physics:         {(this.config.EnableDebrisPhysics ? "ON " : "OFF")}", LogLevel.Info);
+        this.Monitor.Log($"║  Typed debris particles: {(this.config.EnableTypedPhysicsDebris ? "ON " : "OFF")} (lifetime: {this.config.TypedDebrisLifetimeTicks} ticks)", LogLevel.Info);
         this.Monitor.Log($"║  Dragon physics:         {(this.config.EnableDragonPhysics ? "ON " : "OFF")}", LogLevel.Info);
         this.Monitor.Log($"║  Magic cast physics:     {(this.config.EnableMagicCastPhysics ? "ON " : "OFF")}", LogLevel.Info);
         this.Monitor.Log($"║  Wind detection:         {(this.config.EnableWindDetection ? "ON " : "OFF")}", LogLevel.Info);
@@ -362,6 +375,12 @@ public sealed class ModEntry : Mod
         }
 
         this.savedPhysicsPositions.Clear();
+
+        // Draw typed physics debris particles on top of restored world geometry.
+        if (this.config.EnableTypedPhysicsDebris && this.typedParticles.Count > 0)
+        {
+            this.RenderTypedParticles(e.SpriteBatch);
+        }
     }
 
     /// <summary>
@@ -404,6 +423,9 @@ public sealed class ModEntry : Mod
         }
 
         this.Monitor.Log($"[SVP] Warp to '{e.NewLocation?.Name ?? "unknown"}' — door-step physics impulse applied.", LogLevel.Trace);
+
+        // Clear tree tracking so we don't false-trigger tree-fell events on arrival at new location.
+        this.prevTreeTiles.Clear();
     }
 
     private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
@@ -677,6 +699,18 @@ public sealed class ModEntry : Mod
         {
             this.SimulateCropWeedCollision(location);
         }
+
+        // ── Typed physics debris particles — step every tick for smooth arcs
+        if (this.config.EnableTypedPhysicsDebris && this.typedParticles.Count > 0)
+        {
+            this.StepTypedParticles(location);
+        }
+
+        // ── Tree-fell detection — every 3 ticks (trees don't fall sub-tick)
+        if (this.config.EnableTypedPhysicsDebris && e.IsMultipleOf(3))
+        {
+            this.TryDetectTreeFell(location);
+        }
     }
 
     private void OnButtonPressed(object? sender, ButtonPressedEventArgs e)
@@ -836,6 +870,8 @@ public sealed class ModEntry : Mod
         this.wasBobberInAir = false;
         this.wasFishBiting = false;
         this.wasFishCaught = false;
+        this.typedParticles.Clear();
+        this.prevTreeTiles.Clear();
     }
 
     private void LoadData(IModHelper helper)
@@ -1552,6 +1588,14 @@ public sealed class ModEntry : Mod
                         this.hitstopTicksRemaining = Math.Max(this.hitstopTicksRemaining, 5);
                     }
                 }
+
+                // Typed stone/ore debris particles — material-matched to what was struck
+                if (this.config.EnableTypedPhysicsDebris)
+                {
+                    var stoneKind = (tool is Pickaxe) ? PhysicsParticleKind.StoneChunk : PhysicsParticleKind.OreChunk;
+                    this.SpawnTypedDebris(playerPos, stoneKind,        3 + Game1.random.Next(4), 1.5f);
+                    this.SpawnTypedDebris(playerPos, PhysicsParticleKind.Sawdust, 4 + Game1.random.Next(5), 0.7f);
+                }
             }
         }
 
@@ -1583,6 +1627,13 @@ public sealed class ModEntry : Mod
                     var pk    = this.GetCharacterKey(player);
                     var existB = this.bodyImpulse.TryGetValue(pk, out var eb2) ? eb2 : Vector2.Zero;
                     this.bodyImpulse[pk] = existB + woodBackDir * 0.22f;
+                }
+
+                // Typed wood debris — splinters and sawdust that arc outward and scatter
+                if (this.config.EnableTypedPhysicsDebris)
+                {
+                    this.SpawnTypedDebris(playerPos, PhysicsParticleKind.WoodSplinter, 3 + Game1.random.Next(4), 1.3f);
+                    this.SpawnTypedDebris(playerPos, PhysicsParticleKind.Sawdust,      5 + Game1.random.Next(5), 0.7f);
                 }
             }
         }
@@ -4208,7 +4259,270 @@ public sealed class ModEntry : Mod
         return DebrisWeightClass.Medium;
     }
 
-    // ── Horse rider physics ───────────────────────────────────────────────────
+    // ── Typed physics debris particles ────────────────────────────────────────
+
+    /// <summary>
+    /// Spawn <paramref name="count"/> typed physics particles at <paramref name="worldPos"/>
+    /// with randomised outward velocities and an upward bias to create a natural burst arc.
+    /// Sawdust particles are capped at 40 % of the configured lifetime (fast fade).
+    /// The particle list is capped at <see cref="MaxTypedParticles"/>; oldest entries are
+    /// evicted when the cap is hit so performance is bounded.
+    /// </summary>
+    private void SpawnTypedDebris(Vector2 worldPos, PhysicsParticleKind kind, int count, float speed = 1f)
+    {
+        var strength = this.config.DebrisPhysicsStrength;
+
+        for (int i = 0; i < count; i++)
+        {
+            if (this.typedParticles.Count >= MaxTypedParticles)
+            {
+                this.typedParticles.RemoveAt(0); // evict oldest
+            }
+
+            var angle = Game1.random.NextSingle() * MathF.PI * 2f;
+
+            // Per-kind physics constants
+            var (minSpd, maxSpd, upBias) = kind switch
+            {
+                PhysicsParticleKind.WoodSplinter => (1.5f,  3.5f, 0.5f),
+                PhysicsParticleKind.Sawdust      => (0.4f,  1.2f, 0.3f),
+                PhysicsParticleKind.StoneChunk   => (2.0f,  5.0f, 0.5f),
+                PhysicsParticleKind.OreChunk     => (1.8f,  4.5f, 0.5f),
+                PhysicsParticleKind.GemChunk     => (2.5f,  6.0f, 0.4f),
+                _                                => (1.5f,  3.5f, 0.5f),
+            };
+
+            var magnitude = (minSpd + Game1.random.NextSingle() * (maxSpd - minSpd)) * speed * strength;
+            var vel = new Vector2(MathF.Cos(angle) * magnitude, MathF.Sin(angle) * magnitude);
+            // Bias upward (negative Y) to produce a burst-outward arc
+            vel.Y -= (MathF.Abs(vel.Y) * upBias + magnitude * 0.3f);
+
+            var lifetime = this.config.TypedDebrisLifetimeTicks;
+            if (kind == PhysicsParticleKind.Sawdust)
+            {
+                lifetime = Math.Max(120, (int)(lifetime * 0.40f)); // sawdust fades fast
+            }
+
+            var particle = new TypedPhysicsParticle
+            {
+                Position         = worldPos + new Vector2(
+                    (Game1.random.NextSingle() - 0.5f) * 20f,
+                    (Game1.random.NextSingle() - 0.5f) * 10f),
+                Velocity         = vel,
+                Rotation         = Game1.random.NextSingle() * MathF.PI * 2f,
+                RotationVelocity = (Game1.random.NextSingle() - 0.5f) * 0.25f * speed,
+                AgeTicks         = 0,
+                MaxAgeTicks      = lifetime,
+                Kind             = kind,
+                HasBounced       = false,
+            };
+            this.typedParticles.Add(particle);
+        }
+    }
+
+    /// <summary>
+    /// Advance all typed physics particles by one game tick:
+    /// apply gravity and drag, spin each particle, perform a single velocity-reflection
+    /// bounce when Y velocity turns sufficiently positive, apply a scatter impulse when the
+    /// player walks nearby, and remove expired particles.
+    /// </summary>
+    private void StepTypedParticles(GameLocation location)
+    {
+        var playerPos   = Game1.player?.Position ?? Vector2.Zero;
+        var playerMoved = false;
+        var playerVel   = Vector2.Zero;
+
+        if (Game1.player != null
+            && this.lastPositions.TryGetValue(this.GetCharacterKey(Game1.player), out var lpv))
+        {
+            playerVel   = Game1.player.Position - lpv;
+            playerMoved = playerVel.LengthSquared() > 0.05f;
+        }
+
+        var scatterStr = this.config.TypedDebrisScatterStrength;
+
+        for (int i = this.typedParticles.Count - 1; i >= 0; i--)
+        {
+            var p = this.typedParticles[i];
+            p.AgeTicks++;
+
+            if (p.AgeTicks >= p.MaxAgeTicks)
+            {
+                this.typedParticles.RemoveAt(i);
+                continue;
+            }
+
+            // Per-kind gravity and drag constants
+            var (gravity, drag) = p.Kind switch
+            {
+                PhysicsParticleKind.WoodSplinter => (0.12f, 0.97f),
+                PhysicsParticleKind.Sawdust      => (0.04f, 0.92f),
+                PhysicsParticleKind.StoneChunk   => (0.22f, 0.98f),
+                PhysicsParticleKind.OreChunk     => (0.18f, 0.97f),
+                PhysicsParticleKind.GemChunk     => (0.10f, 0.96f),
+                _                                => (0.15f, 0.97f),
+            };
+
+            // Gravity (positive Y = toward bottom of screen)
+            p.Velocity.Y += gravity;
+
+            // One-time bounce: when the particle is falling fast enough, reflect Y velocity
+            if (!p.HasBounced && p.AgeTicks > 8 && p.Velocity.Y > 1.8f)
+            {
+                p.Velocity.Y   *= -0.35f;
+                p.Velocity.X   *= 0.70f;
+                p.RotationVelocity *= 1.4f; // bouncing makes it spin faster
+                p.HasBounced    = true;
+            }
+
+            // Air resistance
+            p.Velocity         *= drag;
+            p.RotationVelocity *= drag;
+
+            // Walk-scatter impulse: player walking nearby kicks debris away
+            if (scatterStr > 0f && playerMoved)
+            {
+                var dist = Vector2.Distance(p.Position, playerPos);
+                if (dist < 60f && dist > 0.5f)
+                {
+                    var scatterDir = Vector2.Normalize(p.Position - playerPos);
+                    if (!float.IsNaN(scatterDir.X) && !float.IsNaN(scatterDir.Y))
+                    {
+                        var falloff    = 1f - dist / 60f;
+                        var scatterMag = playerVel.Length() * falloff * scatterStr * 0.8f;
+                        p.Velocity            += scatterDir * scatterMag;
+                        p.RotationVelocity    += (Game1.random.NextSingle() - 0.5f) * scatterMag * 0.2f;
+                    }
+                }
+            }
+
+            // Integrate
+            p.Position += p.Velocity;
+            p.Rotation += p.RotationVelocity;
+        }
+    }
+
+    /// <summary>
+    /// Scans terrain features for Tree/FruitTree tiles that existed last tick but are now gone.
+    /// Each removed tree tile spawns a burst of wood splinters and sawdust, plus a
+    /// proximity-scaled body/hair impulse on the player to simulate the ground thud.
+    /// Called every 3 ticks from OnUpdateTicked.
+    /// </summary>
+    private void TryDetectTreeFell(GameLocation location)
+    {
+        if (location?.terrainFeatures == null) return;
+
+        // Build current tree tile set
+        var currentTrees = new HashSet<Point>();
+        foreach (var kv in location.terrainFeatures.Pairs)
+        {
+            if (kv.Value is Tree or FruitTree)
+            {
+                currentTrees.Add(new Point((int)kv.Key.X, (int)kv.Key.Y));
+            }
+        }
+
+        // Process removals
+        foreach (var tile in this.prevTreeTiles)
+        {
+            if (currentTrees.Contains(tile)) continue;
+
+            var worldPos = new Vector2(tile.X * 64f + 32f, tile.Y * 64f + 32f);
+
+            // Burst of wood splinters from the impact/stump point
+            this.SpawnTypedDebris(worldPos, PhysicsParticleKind.WoodSplinter, 10 + Game1.random.Next(8), 2.2f);
+            // Sawdust cloud scattered widely
+            this.SpawnTypedDebris(worldPos, PhysicsParticleKind.Sawdust,      14 + Game1.random.Next(8), 1.6f);
+
+            // Player body/hair impulse to simulate ground-thud camera shake
+            if (this.config.EnableTreeFallImpulse && Game1.player != null)
+            {
+                var dist      = Vector2.Distance(worldPos, Game1.player.Position);
+                var maxDist   = 512f;  // 8 tiles
+                if (dist < maxDist)
+                {
+                    var distScale = Math.Max(0.15f, 1f - dist / maxDist);
+                    var thudStr   = this.config.TreeFallImpulseStrength * distScale;
+                    var pKey      = this.GetCharacterKey(Game1.player);
+
+                    if (this.config.EnableBodyPhysics)
+                    {
+                        var existing = this.bodyImpulse.TryGetValue(pKey, out var bi) ? bi : Vector2.Zero;
+                        this.bodyImpulse[pKey] = existing + new Vector2(
+                            (Game1.random.NextSingle() - 0.5f) * 0.18f * thudStr,
+                            0.32f * thudStr);   // downward thud
+                    }
+
+                    if (this.config.EnableHairPhysics)
+                    {
+                        var hExist = this.hairImpulse.TryGetValue(pKey, out var hi) ? hi : Vector2.Zero;
+                        this.hairImpulse[pKey] = hExist + new Vector2(
+                            (Game1.random.NextSingle() - 0.5f) * 0.28f * thudStr,
+                            0.44f * thudStr) * this.config.HairStrength;
+                    }
+                }
+            }
+        }
+
+        this.prevTreeTiles.Clear();
+        foreach (var t in currentTrees) this.prevTreeTiles.Add(t);
+    }
+
+    /// <summary>
+    /// Render all live typed physics particles to the SpriteBatch as small coloured quads.
+    /// Particles fade out over the final 25 % of their lifetime.
+    /// The 1×1 white Texture2D is created lazily on first use so we don't depend on the
+    /// graphics device being ready during Entry().
+    /// </summary>
+    private void RenderTypedParticles(SpriteBatch sb)
+    {
+        if (this.typedParticles.Count == 0) return;
+
+        // Lazily create the pixel texture
+        if (this.pixelTexture is null || this.pixelTexture.IsDisposed)
+        {
+            if (Game1.graphics?.GraphicsDevice is null) return;
+            this.pixelTexture = new Texture2D(Game1.graphics.GraphicsDevice, 1, 1);
+            this.pixelTexture.SetData(new[] { Color.White });
+        }
+
+        var zoom = Game1.options.zoomLevel;
+
+        foreach (var p in this.typedParticles)
+        {
+            // Fade out over the final 25 % of the particle's life
+            var lifeRatio = (float)p.AgeTicks / p.MaxAgeTicks;
+            var alpha     = lifeRatio > 0.75f ? (1f - lifeRatio) / 0.25f : 1f;
+            alpha         = Math.Clamp(alpha, 0f, 1f);
+
+            var (color, size) = p.Kind switch
+            {
+                PhysicsParticleKind.WoodSplinter => (new Color(139,  90,  43, (int)(alpha * 220f)), 3.5f),
+                PhysicsParticleKind.Sawdust      => (new Color(210, 180, 140, (int)(alpha * 150f)), 2.0f),
+                PhysicsParticleKind.StoneChunk   => (new Color(130, 130, 130, (int)(alpha * 240f)), 4.5f),
+                PhysicsParticleKind.OreChunk     => (new Color(184, 115,  51, (int)(alpha * 240f)), 3.5f),
+                PhysicsParticleKind.GemChunk     => (new Color(100, 200, 255, (int)(alpha * 255f)), 3.0f),
+                _                                => (new Color(180, 180, 180, (int)(alpha * 200f)), 3.0f),
+            };
+
+            if (color.A < 4) continue; // fully transparent — skip draw call
+
+            var screenPos = Game1.GlobalToLocal(Game1.viewport, p.Position);
+
+            sb.Draw(
+                this.pixelTexture,
+                screenPos,
+                null,
+                color,
+                p.Rotation,
+                new Vector2(0.5f, 0.5f),      // centre-origin for rotation
+                size * zoom,
+                SpriteEffects.None,
+                0.91f);                        // draw on top of terrain, behind UI
+        }
+    }
+
+
 
     /// <summary>
     /// While the farmer is riding a horse, apply extra vertical bounce from hoofbeats.
@@ -5143,6 +5457,37 @@ public sealed class ModEntry : Mod
             () => this.config.WoodShatterIntensity, v => this.config.WoodShatterIntensity = v,
             () => "Wood shatter intensity",
             () => "Particle count multiplier. 1 = 4-8 splinters (default), 2 = dramatic chunk shower.", 0f, 2f, 0.1f);
+
+        // ── Typed physics debris ──────────────────────────────────────────────
+        api.AddSectionTitle(this.ModManifest, () => "Typed Physics Debris");
+        api.AddParagraph(this.ModManifest, () =>
+            "Material-matched physics particles: stone chunks from rocks/ore/geodes, wood splinters and " +
+            "sawdust from trees and stumps. Particles arc under gravity, bounce once, scatter when walked through, " +
+            "and fade out over their lifetime. Complements the existing radial debris system.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableTypedPhysicsDebris, v => this.config.EnableTypedPhysicsDebris = v,
+            () => "Enable typed physics debris",
+            () => "Stone chunks, wood splinters, and sawdust that arc, bounce, scatter on walk-through, and fade.");
+        api.AddNumberOption(this.ModManifest,
+            () => (float)this.config.TypedDebrisLifetimeTicks,
+            v  => this.config.TypedDebrisLifetimeTicks = (int)v,
+            () => "Debris lifetime (ticks)",
+            () => "How long debris particles remain before fading. 1200 = 20 s, 1500 = 25 s (default), 1800 = 30 s.",
+            1200f, 1800f, 60f);
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.TypedDebrisScatterStrength, v => this.config.TypedDebrisScatterStrength = v,
+            () => "Debris scatter strength",
+            () => "How strongly debris scatters when you walk through it. 0 = no scatter, 1 = default, 2 = very strong.",
+            0f, 2f, 0.1f);
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableTreeFallImpulse, v => this.config.EnableTreeFallImpulse = v,
+            () => "Enable tree-fall thud impulse",
+            () => "Apply a body/hair impulse to simulate screen-shake when a felled tree hits the ground.");
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.TreeFallImpulseStrength, v => this.config.TreeFallImpulseStrength = v,
+            () => "Tree-fall impulse strength",
+            () => "Intensity of the player body/hair impulse on tree thud. 0 = off, 1 = default. Scales with distance.",
+            0f, 2f, 0.1f);
 
         // ── Wing physics ──────────────────────────────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "Wing Physics (HDT Multi-Bone)");
