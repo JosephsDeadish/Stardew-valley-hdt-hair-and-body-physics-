@@ -32,6 +32,9 @@ public sealed class ModEntry : Mod
     // ── Hit tracking ──────────────────────────────────────────────────────────
     private int lastPlayerHealth = -1;
 
+    // ── Hitstop ───────────────────────────────────────────────────────────────
+    private int hitstopTicksRemaining = 0;
+
     // ── Optional mod integrations ─────────────────────────────────────────────
     private bool fashionSenseLoaded = false;
 
@@ -78,6 +81,13 @@ public sealed class ModEntry : Mod
     {
         if (!Context.IsWorldReady || Game1.currentLocation is null)
         {
+            return;
+        }
+
+        // Hitstop: brief physics pause on significant hit for impact feedback
+        if (this.hitstopTicksRemaining > 0)
+        {
+            this.hitstopTicksRemaining--;
             return;
         }
 
@@ -231,6 +241,8 @@ public sealed class ModEntry : Mod
         this.farmAnimalKnockdown.Clear();
         this.grassBendDisplacement = Vector2.Zero;
         this.grassBendVelocity = Vector2.Zero;
+        this.hitstopTicksRemaining = 0;
+        this.lastPlayerHealth = -1;
     }
 
     private void LoadData(IModHelper helper)
@@ -399,7 +411,23 @@ public sealed class ModEntry : Mod
             _ => 0.35f
         };
 
-        impulse += new Vector2(-velocity.X, -velocity.Y) * (0.03f + (baseStrength * 0.04f));
+        // Clothing modifier: heavier outfit slightly dampens physics (realistic cloth resistance)
+        var clothingMult = (this.config.EnableClothingPhysicsModifier && character is Farmer cfm)
+            ? this.GetClothingPhysicsMultiplier(cfm)
+            : 1f;
+
+        impulse += new Vector2(-velocity.X, -velocity.Y) * ((0.03f + (baseStrength * 0.04f)) * clothingMult);
+
+        // Extra breast bounce for feminine profile: "very bouncy stretchy breast jiggle galore"
+        // Breast physics: independent vertical oscillation with slower decay than overall body
+        if (profile == BodyProfileType.Feminine)
+        {
+            var breastExtra = this.config.FemaleBreastStrength * 0.035f * clothingMult;
+            impulse += new Vector2(-velocity.X * 0.4f, -velocity.Y * 0.8f) * breastExtra;
+            impulse += new Vector2(
+                (Game1.random.NextSingle() - 0.5f) * breastExtra * 0.3f,
+                0f);
+        }
 
         // Swimming: water resistance — stronger movement wave but rapid oscillations are damped
         if (character is Farmer swimmingFarmer && swimmingFarmer.swimming.Value)
@@ -410,7 +438,8 @@ public sealed class ModEntry : Mod
             return;
         }
 
-        impulse *= 0.86f;
+        // Feminine gets slightly slower decay = bouncier, longer settling jiggles
+        impulse *= profile == BodyProfileType.Feminine ? 0.84f : 0.86f;
 
         this.bodyImpulse[key] = impulse;
     }
@@ -608,6 +637,115 @@ public sealed class ModEntry : Mod
             var hairExisting = this.hairImpulse.TryGetValue(playerKey, out var hi) ? hi : Vector2.Zero;
             this.hairImpulse[playerKey] = hairExisting + hitImpulse * (this.config.HairStrength * 0.7f);
         }
+
+        // Hitstop: brief physics freeze for impact feedback (~50 ms at 60 ticks/s)
+        if (this.config.EnableHitstopEffect && damageFactor > 0.3f)
+        {
+            this.hitstopTicksRemaining = Math.Clamp((int)(damageFactor * 4f), 1, 6);
+        }
+    }
+
+    // ── Clothing physics helpers ──────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns a multiplier (0.88–1.0) based on how many clothing slots the farmer has filled.
+    /// More clothing = slightly dampened physics (cloth adds mass and restricts jiggle).
+    /// Hat, shirt, pants, and shoes each contribute a small reduction.
+    /// </summary>
+    private float GetClothingPhysicsMultiplier(Farmer farmer)
+    {
+        int clothingCount = 0;
+        if (farmer.hat.Value is not null) clothingCount++;
+        if (farmer.shirtItem.Value is not null) clothingCount++;
+        if (farmer.pantsItem.Value is not null) clothingCount++;
+        if (farmer.boots.Value is not null) clothingCount++;
+        return 1f - (clothingCount * 0.03f);
+    }
+
+    /// <summary>
+    /// Each clothing slot (hat, shirt, pants, shoes) has a configured chance to fly off during
+    /// ragdoll. Removed items become pickable debris scattered near the farmer.
+    /// Shirt and pants scatter close (cloth physics), boots may roll further (heavier).
+    /// </summary>
+    private void TryScatterClothing(Farmer farmer)
+    {
+        if (!this.config.EnableClothingPhysicsModifier || Game1.currentLocation is null)
+        {
+            return;
+        }
+
+        var chance = this.config.RagdollClothingScatterChance;
+
+        if (farmer.hat.Value is not null && Game1.random.NextDouble() < chance)
+        {
+            var offset = new Vector2(
+                (Game1.random.NextSingle() - 0.5f) * 80f,
+                (Game1.random.NextSingle() - 0.5f) * 80f);
+            Game1.createItemDebris(farmer.hat.Value, farmer.Position + offset, farmer.FacingDirection, Game1.currentLocation);
+            farmer.hat.Value = null;
+        }
+
+        if (farmer.shirtItem.Value is not null && Game1.random.NextDouble() < chance)
+        {
+            var offset = new Vector2(
+                (Game1.random.NextSingle() - 0.5f) * 60f,
+                (Game1.random.NextSingle() - 0.5f) * 60f);
+            Game1.createItemDebris(farmer.shirtItem.Value, farmer.Position + offset, farmer.FacingDirection, Game1.currentLocation);
+            farmer.shirtItem.Value = null;
+        }
+
+        if (farmer.pantsItem.Value is not null && Game1.random.NextDouble() < chance)
+        {
+            var offset = new Vector2(
+                (Game1.random.NextSingle() - 0.5f) * 60f,
+                (Game1.random.NextSingle() - 0.5f) * 60f);
+            Game1.createItemDebris(farmer.pantsItem.Value, farmer.Position + offset, farmer.FacingDirection, Game1.currentLocation);
+            farmer.pantsItem.Value = null;
+        }
+
+        if (farmer.boots.Value is not null && Game1.random.NextDouble() < chance)
+        {
+            // Boots bounce/roll a bit further (heavier, harder sole)
+            var offset = new Vector2(
+                (Game1.random.NextSingle() - 0.5f) * 96f,
+                (Game1.random.NextSingle() - 0.5f) * 96f);
+            Game1.createItemDebris(farmer.boots.Value, farmer.Position + offset, farmer.FacingDirection, Game1.currentLocation);
+            farmer.boots.Value = null;
+        }
+    }
+
+    /// <summary>
+    /// Configurable chance to knock one random item from inventory during ragdoll.
+    /// Item is scattered nearby as pickable debris. Simulates items jolted loose by impact.
+    /// </summary>
+    private void TryDropInventoryItem(Farmer farmer)
+    {
+        if (Game1.currentLocation is null)
+        {
+            return;
+        }
+
+        if (Game1.random.NextDouble() >= this.config.RagdollItemDropChance)
+        {
+            return;
+        }
+
+        // Pick a random non-null, non-active-tool inventory item
+        var candidates = farmer.Items
+            .Where(item => item is not null && item != farmer.CurrentItem)
+            .ToList();
+        if (candidates.Count == 0)
+        {
+            return;
+        }
+
+        var dropped = candidates[Game1.random.Next(candidates.Count)];
+        farmer.removeItemFromInventory(dropped);
+
+        var offset = new Vector2(
+            (Game1.random.NextSingle() - 0.5f) * 80f,
+            (Game1.random.NextSingle() - 0.5f) * 80f);
+        Game1.createItemDebris(dropped, farmer.Position + offset, farmer.FacingDirection, Game1.currentLocation);
     }
 
     /// <summary>
@@ -782,7 +920,7 @@ public sealed class ModEntry : Mod
             return;
         }
 
-        if (Game1.ticks % 180 != 0)
+        if (Game1.ticks % 180 != (this.GetCharacterKey(character) % 180))
         {
             return;
         }
@@ -805,7 +943,7 @@ public sealed class ModEntry : Mod
             return;
         }
 
-        if (farmer.health >= 30 || velocity.LengthSquared() < 2f)
+        if (farmer.health > (int)this.config.RagdollHealthThreshold || velocity.LengthSquared() < 2f)
         {
             return;
         }
@@ -827,6 +965,10 @@ public sealed class ModEntry : Mod
         }
 
         farmer.Position += nudge;
+
+        // Scatter clothing and possibly drop an item from inventory
+        this.TryScatterClothing(farmer);
+        this.TryDropInventoryItem(farmer);
 
         // Ragdolling body crashes through grass — flatten it outward
         if (this.config.EnableEnvironmentalPhysics && Game1.currentLocation?.IsOutdoors == true)
@@ -864,6 +1006,22 @@ public sealed class ModEntry : Mod
         }
 
         monster.Position += nudge;
+
+        // Skeleton disintegration: bones scatter in multiple directions then slowly reassemble
+        // (decay of 0.72 means the scatter impulse self-corrects within ~15 ticks)
+        if (this.DetectMonsterArchetype(monster) == MonsterPhysicsArchetype.Skeleton)
+        {
+            var scatterKey = this.GetCharacterKey(monster);
+            var sImpulse = this.monsterBodyImpulse.TryGetValue(scatterKey, out var si) ? si : Vector2.Zero;
+            for (int i = 0; i < 4; i++)
+            {
+                var boneDir = new Vector2(
+                    (Game1.random.NextSingle() - 0.5f) * 2f,
+                    (Game1.random.NextSingle() - 0.5f) * 2f);
+                sImpulse += boneDir * (this.config.RagdollKnockbackStrength * 0.3f);
+            }
+            this.monsterBodyImpulse[scatterKey] = sImpulse;
+        }
 
         // Monster ragdolling into grass flattens it
         if (this.config.EnableEnvironmentalPhysics && Game1.currentLocation?.IsOutdoors == true)
@@ -1107,6 +1265,14 @@ public sealed class ModEntry : Mod
             () => "Enable hit directional impulse",
             () => "Body parts and hair fly in the direction of the hit when the player takes damage. " +
                   "Skeleton smacks → boobs/butt bounce away from the hand. Slime hit → belly ripple at impact point. Explosion → radial body push.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableClothingPhysicsModifier, v => this.config.EnableClothingPhysicsModifier = v,
+            () => "Enable clothing physics modifier",
+            () => "Worn clothing slightly dampens body physics (cloth resistance). Also enables ragdoll clothing scatter (hat/shirt/pants/shoes can fly off).");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableHitstopEffect, v => this.config.EnableHitstopEffect = v,
+            () => "Enable hitstop effect",
+            () => "Brief physics freeze (~3–6 ticks) on significant hits for impact feedback. Scales with damage dealt.");
 
         // ── Quick presets ─────────────────────────────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "Quick Presets");
@@ -1182,6 +1348,18 @@ public sealed class ModEntry : Mod
             () => this.config.NpcSwordKnockdownChance, v => this.config.NpcSwordKnockdownChance = v,
             () => "NPC/pet knockdown chance",
             () => "Probability NPCs and pets react to nearby sword swings. 0 = never, 1 = always. Cosmetic only.", 0f, 1f, 0.05f);
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.RagdollHealthThreshold, v => this.config.RagdollHealthThreshold = v,
+            () => "Ragdoll HP threshold",
+            () => "Player must be at or below this HP for ragdoll knockback to activate. Default: 30.", 1f, 100f, 1f);
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.RagdollClothingScatterChance, v => this.config.RagdollClothingScatterChance = v,
+            () => "Clothing scatter chance",
+            () => "Per-slot chance (0–1) that hat, shirt, pants, or shoes fly off during ragdoll. Walk over to pick back up. 0 = never, 1 = always.", 0f, 1f, 0.05f);
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.RagdollItemDropChance, v => this.config.RagdollItemDropChance = v,
+            () => "Inventory item drop chance",
+            () => "Chance (0–1) that one inventory item is knocked out during ragdoll. 0 = never, 1 = always.", 0f, 1f, 0.05f);
 
         // ── Monster archetype physics ─────────────────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "Monster Physics");

@@ -50,5 +50,15 @@
   { "NameContains": "Bone",         "Archetype": "Skeleton" },
   { "NameContains": "Mummy",        "Archetype": "Skeleton" },
   { "NameContains": "Undead",       "Archetype": "Skeleton" },
-  { "NameContains": "Revenant",     "Archetype": "Skeleton" }
+  { "NameContains": "Revenant",     "Archetype": "Skeleton" },
+
+  { "NameContains": "Iridium Bat",  "Archetype": "Bat" },
+  { "NameContains": "Carbon Ghost", "Archetype": "Bat" },
+  { "NameContains": "Purple Slime", "Archetype": "Slime" },
+  { "NameContains": "Tiger Slime",  "Archetype": "Slime" },
+  { "NameContains": "Royal Serpent","Archetype": "Worm" },
+  { "NameContains": "Iridium Golem","Archetype": "Skeleton" },
+  { "NameContains": "Squid Kid",    "Archetype": "FlyingBug" },
+  { "NameContains": "Pepper Rex",   "Archetype": "Generic" },
+  { "NameContains": "Iridium Crab", "Archetype": "Skeleton" }
 ]

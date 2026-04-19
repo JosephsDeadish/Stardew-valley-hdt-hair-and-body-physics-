@@ -1,7 +1,7 @@
 [
   {
     "Name": "Soft",
-    "FemaleBreastStrength": 0.35,
+    "FemaleBreastStrength": 0.50,
     "FemaleButtStrength": 0.3,
     "FemaleThighStrength": 0.25,
     "FemaleBellyStrength": 0.2,
@@ -17,7 +17,7 @@
   },
   {
     "Name": "Default",
-    "FemaleBreastStrength": 0.55,
+    "FemaleBreastStrength": 0.75,
     "FemaleButtStrength": 0.5,
     "FemaleThighStrength": 0.4,
     "FemaleBellyStrength": 0.3,
@@ -33,7 +33,7 @@
   },
   {
     "Name": "High",
-    "FemaleBreastStrength": 0.85,
+    "FemaleBreastStrength": 1.10,
     "FemaleButtStrength": 0.8,
     "FemaleThighStrength": 0.65,
     "FemaleBellyStrength": 0.45,

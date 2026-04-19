@@ -15,9 +15,11 @@ public sealed class ModConfig
     public bool EnableItemCollisionPhysics { get; set; } = true;
     public bool EnableWindDetection { get; set; } = true;
     public bool EnableHitDirectionalImpulse { get; set; } = true;
+    public bool EnableClothingPhysicsModifier { get; set; } = true;
+    public bool EnableHitstopEffect { get; set; } = true;
 
     // ── Feminine body strengths ───────────────────────────────────────────────
-    public float FemaleBreastStrength { get; set; } = 0.55f;
+    public float FemaleBreastStrength { get; set; } = 0.75f;
     public float FemaleButtStrength { get; set; } = 0.5f;
     public float FemaleThighStrength { get; set; } = 0.4f;
     public float FemaleBellyStrength { get; set; } = 0.3f;
@@ -37,6 +39,12 @@ public sealed class ModConfig
     public float RagdollChanceUnderLowHealth { get; set; } = 0.5f;
     public float RagdollKnockbackStrength { get; set; } = 1.5f;
     public float NpcSwordKnockdownChance { get; set; } = 0.4f;
+    /// <summary>Player HP must be at or below this value for ragdoll to activate (0–100).</summary>
+    public float RagdollHealthThreshold { get; set; } = 30f;
+    /// <summary>Chance (0–1) each clothing slot (hat, shirt, pants, shoes) flies off on ragdoll.</summary>
+    public float RagdollClothingScatterChance { get; set; } = 0.10f;
+    /// <summary>Chance (0–1) that one inventory item is dropped during ragdoll.</summary>
+    public float RagdollItemDropChance { get; set; } = 0.15f;
 
     // ── Monster archetype physics ─────────────────────────────────────────────
     public float MonsterArchetypeStrength { get; set; } = 0.55f;
