@@ -50,6 +50,18 @@ public sealed class ModConfig
     public bool EnableEatingBounce { get; set; } = true;
     /// <summary>Brief body/hair flinch when lightning strikes outdoors.</summary>
     public bool EnableLightningFlinch { get; set; } = true;
+    /// <summary>
+    /// Fishing rod cast, reel, and catch all trigger body/hair impulses:
+    /// cast = forward lean + hair sweep, nibble = body twitch, catch = body snap-back.
+    /// Works with all fishing rods including mod-added ones.
+    /// </summary>
+    public bool EnableFishingPhysics { get; set; } = true;
+    /// <summary>
+    /// When casting a fishing rod, check if any NPC, monster, or farm animal is in the
+    /// cast trajectory. If so, apply a harmless cosmetic knockdown (bobber bonk).
+    /// The NPC/animal stumbles and sits down briefly — no damage or relationship impact.
+    /// </summary>
+    public bool EnableBobberBonk { get; set; } = true;
 
     // ── Combat hit VFX ────────────────────────────────────────────────────────
     /// <summary>

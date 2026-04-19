@@ -48,6 +48,12 @@ public sealed class ModEntry : Mod
     private int lastSkillLevelSum = -1;
     private int levelUpBounceTicksRemaining = 0;
 
+    // ── Fishing physics state ──────────────────────────────────────────────────
+    private bool wasFishingRodActive = false;   // was the player holding a fishing rod last tick?
+    private bool wasBobberInAir = false;        // was the bobber still flying last tick?
+    private bool wasFishBiting = false;         // was a fish on the hook last tick?
+    private bool wasFishCaught = false;         // was a fish caught last tick?
+
     // ── Dragon ragdoll cooldown ────────────────────────────────────────────────
     private readonly Dictionary<int, int> dragonRagdollCooldown = new();
 
@@ -165,6 +171,8 @@ public sealed class ModEntry : Mod
         this.Monitor.Log($"║  Warp-step impulse:      {(this.config.EnableWarpStepImpulse ? "ON " : "OFF")}", LogLevel.Info);
         this.Monitor.Log($"║  Eating bounce:          {(this.config.EnableEatingBounce ? "ON " : "OFF")}", LogLevel.Info);
         this.Monitor.Log($"║  Lightning flinch:       {(this.config.EnableLightningFlinch ? "ON " : "OFF")}", LogLevel.Info);
+        this.Monitor.Log($"║  Fishing physics:        {(this.config.EnableFishingPhysics ? "ON " : "OFF")}", LogLevel.Info);
+        this.Monitor.Log($"║  Bobber bonk:            {(this.config.EnableBobberBonk ? "ON " : "OFF")}", LogLevel.Info);
         this.Monitor.Log($"║  Blood splatter VFX:     {(this.config.EnableBloodSplatterEffects ? "ON " : "OFF")}", LogLevel.Info);
         this.Monitor.Log($"║  Spark VFX:              {(this.config.EnableSparkEffects ? "ON " : "OFF")}", LogLevel.Info);
         this.Monitor.Log($"║  Slime spray VFX:        {(this.config.EnableSlimeSprayEffects ? "ON " : "OFF")}", LogLevel.Info);
@@ -353,6 +361,12 @@ public sealed class ModEntry : Mod
             }
 
             this.wasLightning = isLightning;
+        }
+
+        // Fishing physics: state-change body/hair impulses for cast, nibble, catch
+        if (this.config.EnableFishingPhysics && this.config.EnableBodyPhysics && Game1.player is not null)
+        {
+            this.TickFishingPhysics(Game1.player);
         }
 
         // Skill level-up bounce: check if any skill level increased since last tick
@@ -553,9 +567,13 @@ public sealed class ModEntry : Mod
             }
         }
 
-        // NPC sword knockdown — harmless cosmetic knockback
+        // NPC knockdown — works for any combat/heavy tool: sword, axe, scythe, pickaxe, modded weapons.
+        // A tool is "combat capable" if it is not a non-combat utility (watering can, fishing rod, hoe,
+        // milk pail, shears).  This covers vanilla weapons AND any weapon mod that adds a MeleeWeapon-
+        // derived item or a Tool with a combat-sounding name.
         if (this.config.EnableNpcSwordKnockdown
-            && Game1.player.CurrentTool is MeleeWeapon
+            && Game1.player.CurrentTool is not null
+            && this.IsCombatCapableTool(Game1.player.CurrentTool)
             && Game1.currentLocation is not null)
         {
             foreach (var character in this.EnumerateHumanoids(Game1.currentLocation))
@@ -567,15 +585,32 @@ public sealed class ModEntry : Mod
 
                 this.TryApplyNpcSwordKnockdown(character);
             }
+
+            // Also knock monsters back (they already get ragdoll, but knockdown adds cosmetic stumble)
+            foreach (var monster in this.EnumerateMonsters(Game1.currentLocation))
+            {
+                this.TryApplyNpcSwordKnockdown(monster);
+            }
         }
 
-        // Farm animal sword/tool collision reaction
-        if (this.config.EnableFarmAnimalPhysics && Game1.currentLocation is not null)
+        // Farm animal tool collision reaction — any non-utility tool causes a startle bounce
+        if (this.config.EnableFarmAnimalPhysics
+            && Game1.player.CurrentTool is not null
+            && this.IsCombatCapableTool(Game1.player.CurrentTool)
+            && Game1.currentLocation is not null)
         {
             foreach (var animal in EnumerateFarmAnimals(Game1.currentLocation))
             {
                 this.TryApplyFarmAnimalCollision(animal);
             }
+        }
+
+        // Bobber bonk: fishing rod cast aimed at nearby NPC/animal
+        if (this.config.EnableBobberBonk
+            && Game1.player.CurrentTool is FishingRod
+            && Game1.currentLocation is not null)
+        {
+            this.TryBobberBonk(Game1.player);
         }
 
         // Tool swing disturbs grass based on tool weight/shape
@@ -623,6 +658,10 @@ public sealed class ModEntry : Mod
         this.levelUpBounceTicksRemaining = 0;
         this.dragonRagdollCooldown.Clear();
         this.idleCycleStep.Clear();
+        this.wasFishingRodActive = false;
+        this.wasBobberInAir = false;
+        this.wasFishBiting = false;
+        this.wasFishCaught = false;
     }
 
     private void LoadData(IModHelper helper)
@@ -1448,68 +1487,127 @@ public sealed class ModEntry : Mod
             ? this.GetClothingPhysicsMultiplier(cfm)
             : 1f;
 
+        // Base inertia lag: body resists direction change (mass effect)
         impulse += new Vector2(-velocity.X, -velocity.Y) * ((0.03f + (baseStrength * 0.04f)) * clothingMult);
 
-        // Extra breast bounce for feminine profile: "very bouncy stretchy breast jiggle galore"
-        // Breast physics: independent vertical oscillation with slower decay than overall body
-        if (profile == BodyProfileType.Feminine)
-        {
-            var breastExtra = this.config.FemaleBreastStrength * 0.035f * clothingMult;
-            impulse += new Vector2(-velocity.X * 0.4f, -velocity.Y * 0.8f) * breastExtra;
-            impulse += new Vector2(
-                (Game1.random.NextSingle() - 0.5f) * breastExtra * 0.3f,
-                0f);
-        }
-
-        // Directional body boost: facing away from camera (down) = back/butt most visible
-        // → breasts splay laterally, butt/thigh jiggle amplified; facing up = subtler
-        if (this.config.EnableDirectionalBodyBoost && velocity.LengthSquared() > 0.04f)
+        // ── Directional body physics ──────────────────────────────────────────
+        // Each facing direction produces a distinct jiggle signature for breast/butt/groin.
+        // EnableDirectionalBodyBoost gates this whole block.
+        if (this.config.EnableDirectionalBodyBoost && velocity.LengthSquared() > 0.03f)
         {
             var facing = character.FacingDirection;
-            if (facing == 2) // down — walking away, back is the most visible surface
+            var speed  = velocity.Length();
+
+            if (profile == BodyProfileType.Feminine)
             {
-                // Breast lateral splay: when facing away the breasts press outward at each step
-                if (profile == BodyProfileType.Feminine)
+                var bStr  = this.config.FemaleBreastStrength * clothingMult;
+                var buStr = this.config.FemaleButtStrength   * clothingMult;
+                var thStr = this.config.FemaleThighStrength  * clothingMult;
+
+                switch (facing)
                 {
-                    var lateralSplay = this.config.FemaleBreastStrength * 0.05f * clothingMult;
-                    impulse += new Vector2(
-                        (Game1.random.NextSingle() - 0.5f) * 2f * lateralSplay,
-                        (Game1.random.NextSingle() - 0.5f) * lateralSplay * 0.3f);
+                    case 0: // North — walking up/away: breasts sway outward to sides, inward snap
+                        // Lateral outward sweep: each step pushes breasts to sides then they snap back
+                        impulse += new Vector2(
+                            (Game1.random.NextSingle() - 0.5f) * 2f * bStr * 0.075f,  // large lateral
+                            (Game1.random.NextSingle() - 0.5f)       * bStr * 0.025f); // tiny Y jiggle
+                        // Periodic outward snap at step cadence
+                        if (Game1.ticks % 14 == key % 14)
+                        {
+                            var sign = ((Game1.ticks / 14) % 2 == 0) ? 1f : -1f;
+                            impulse += new Vector2(sign * bStr * 0.06f * speed, 0f);
+                        }
+                        // Butt also prominent facing north (back of character visible)
+                        impulse += new Vector2(
+                            (Game1.random.NextSingle() - 0.5f) * buStr * 0.04f,
+                            Math.Abs(velocity.Y) * buStr * 1.6f); // strong up-down butt jiggle
+                        break;
+
+                    case 2: // South — walking toward camera: breasts bounce up-down, outward-inward
+                        // Strong vertical jello bounce: up on foot-down, outward flare, then spring back
+                        impulse += new Vector2(
+                            (Game1.random.NextSingle() - 0.5f) * bStr * 0.06f,   // slight lateral outward
+                            -Math.Abs(velocity.Y) * bStr * 0.14f);               // strong upward on step
+                        // Jello outward flare at step rhythm
+                        if (Game1.ticks % 14 == key % 14)
+                        {
+                            impulse += new Vector2(
+                                (Game1.random.NextSingle() - 0.5f) * bStr * 0.08f,  // outward flare
+                                bStr * 0.05f * speed);  // downward settle
+                        }
+                        // Belly bounce toward camera
+                        impulse += new Vector2(
+                            (Game1.random.NextSingle() - 0.5f) * this.config.FemaleBellyStrength * clothingMult * 0.04f,
+                            -Math.Abs(velocity.Y) * this.config.FemaleBellyStrength * clothingMult * 0.06f);
+                        // Thigh jiggle
+                        impulse += new Vector2(0f, Math.Abs(velocity.Y) * thStr * 0.04f);
+                        break;
+
+                    case 1: // East — walking right: breasts mostly up-down with slight outward-inward
+                    case 3: // West — walking left
+                        // Primary up-down jello bounce (visible profile)
+                        impulse += new Vector2(
+                            (Game1.random.NextSingle() - 0.5f) * bStr * 0.025f,  // tiny lateral
+                            -Math.Abs(velocity.Y) * bStr * 0.12f);               // dominant up-down
+                        // Periodic outward-inward at step cadence
+                        if (Game1.ticks % 12 == key % 12)
+                        {
+                            var lateral = (facing == 1 ? 1f : -1f);
+                            impulse += new Vector2(lateral * bStr * 0.03f * speed, bStr * 0.03f * speed);
+                        }
+                        // Thigh and butt jiggle (visible from side)
+                        impulse += new Vector2(0f, Math.Abs(velocity.X) * buStr * 0.05f);
+                        break;
                 }
 
-                // Butt amplification: posterior jiggle is very prominent from behind
-                var buttBoost = profile switch
-                {
-                    BodyProfileType.Feminine  => this.config.FemaleButtStrength  * 0.06f * clothingMult,
-                    BodyProfileType.Masculine => this.config.MaleButtStrength    * 0.055f * clothingMult,
-                    _                         => 0.025f * clothingMult
-                };
+                // Always-on jello micro-randomness for feminine: ensures physics never go fully still
                 impulse += new Vector2(
-                    (Game1.random.NextSingle() - 0.5f) * buttBoost * 0.5f,
-                    Math.Abs(velocity.Y) * buttBoost * 1.8f); // strong up-down jiggle in walk direction
+                    (Game1.random.NextSingle() - 0.5f) * bStr * 0.022f,
+                    (Game1.random.NextSingle() - 0.5f) * bStr * 0.018f);
             }
-            else if (facing == 0) // up — walking toward camera, front visible
+            else if (profile == BodyProfileType.Masculine)
             {
-                // Belly and front bounce: belly swings forward with each step
-                var bellyBoost = profile switch
+                var grStr = this.config.MaleGroinStrength * clothingMult;
+                var buStr = this.config.MaleButtStrength  * clothingMult;
+
+                // Male groin physics: slinky-style oscillation — side-to-side for N/S, front-back for E/W
+                switch (facing)
                 {
-                    BodyProfileType.Feminine  => this.config.FemaleBellyStrength * 0.04f * clothingMult,
-                    BodyProfileType.Masculine => this.config.MaleBellyStrength   * 0.035f * clothingMult,
-                    _                         => 0.02f * clothingMult
-                };
+                    case 0: // North: lateral slinky side-to-side
+                    case 2: // South: lateral slinky side-to-side
+                        impulse += new Vector2(
+                            (float)Math.Sin(Game1.ticks * 0.22f + key * 0.1f) * grStr * 0.035f,
+                            (Game1.random.NextSingle() - 0.5f) * grStr * 0.010f);
+                        break;
+
+                    case 1: // East: forward-back slinky
+                    case 3: // West: forward-back slinky
+                        impulse += new Vector2(
+                            (Game1.random.NextSingle() - 0.5f) * grStr * 0.010f,
+                            (float)Math.Sin(Game1.ticks * 0.22f + key * 0.1f) * grStr * 0.035f);
+                        break;
+                }
+
+                // Butt bounce for masculine (all directions)
+                impulse += new Vector2(0f, Math.Abs(velocity.Length()) * buStr * 0.04f);
+            }
+            else // Androgynous
+            {
                 impulse += new Vector2(
-                    (Game1.random.NextSingle() - 0.5f) * bellyBoost * 0.4f,
-                    -Math.Abs(velocity.Y) * bellyBoost * 1.2f);
+                    (Game1.random.NextSingle() - 0.5f) * baseStrength * 0.02f,
+                    (Game1.random.NextSingle() - 0.5f) * baseStrength * 0.02f);
             }
         }
 
         // Continuous micro-activity: very small random baseline so physics never go fully dormant.
         // Simulates the constant tiny vibrations of breathing, muscle tension, and micro-movements.
+        // Feminine gets a larger baseline so jello quality is always present even when standing.
         if (baseStrength > 0f)
         {
+            var microScale = profile == BodyProfileType.Feminine ? 0.013f : 0.008f;
             impulse += new Vector2(
-                (Game1.random.NextSingle() - 0.5f) * 0.008f * baseStrength,
-                (Game1.random.NextSingle() - 0.5f) * 0.006f * baseStrength);
+                (Game1.random.NextSingle() - 0.5f) * microScale * baseStrength,
+                (Game1.random.NextSingle() - 0.5f) * microScale * 0.75f * baseStrength);
         }
 
         // Swimming: water resistance — stronger movement wave but rapid oscillations are damped
@@ -1521,8 +1619,14 @@ public sealed class ModEntry : Mod
             return;
         }
 
-        // Feminine gets slightly slower decay = bouncier, longer settling jiggles
-        impulse *= profile == BodyProfileType.Feminine ? 0.84f : 0.86f;
+        // Feminine gets much slower decay = very jello-like, long lingering jiggles.
+        // Masculine gets medium. Androgynous slightly bouncier than masculine.
+        impulse *= profile switch
+        {
+            BodyProfileType.Feminine  => 0.80f, // very slow settle = ultra-jello
+            BodyProfileType.Masculine => 0.86f,
+            _                         => 0.84f
+        };
 
         this.bodyImpulse[key] = impulse;
     }
@@ -2157,8 +2261,233 @@ public sealed class ModEntry : Mod
         this.Monitor.Log("[SVP] Lightning strike — full-body flinch impulse applied.", LogLevel.Trace);
     }
 
+    // ── Fishing physics ───────────────────────────────────────────────────────
+
     /// <summary>
-    /// Body jiggle for farm animals. Heavy animals (cow, goat, sheep, pig, ostrich) get lower
+    /// Returns true for any Tool that functions as a combat or heavy physical weapon:
+    /// MeleeWeapon, Axe, Pickaxe, or any custom tool whose name suggests a weapon.
+    /// Excludes watering cans, fishing rods, hoes, milk pails, shears, and other utility tools.
+    /// Covers ALL modded weapons as long as they are either MeleeWeapon derivatives or have
+    /// a weapon-sounding name — broad intentional heuristic for full mod compatibility.
+    /// </summary>
+    private static bool IsCombatCapableTool(Tool tool)
+    {
+        if (tool is MeleeWeapon or Axe or Pickaxe) return true;
+        if (tool is WateringCan or FishingRod or Hoe or MilkPail or Shears) return false;
+        // Any other tool: check name for weapon keywords (covers mods)
+        var name = tool.Name ?? string.Empty;
+        return ContainsAny(name, "sword", "blade", "axe", "scythe", "dagger", "spear", "lance",
+                                 "hammer", "club", "mace", "fist", "claw", "staff", "wand", "bow",
+                                 "crossbow", "gun", "pistol", "weapon", "sickle", "whip", "flail");
+    }
+
+    /// <summary>
+    /// Tracks the fishing rod state each tick and fires appropriate body/hair impulses:
+    ///   Cast start (bobber enters air): body leans forward, hair sweeps forward
+    ///   Bobber lands: body settles with small jolt
+    ///   Fish biting (isFishing → hook response): subtle body twitch
+    ///   Fish caught (fishCaught transition): body snaps back from release of tension + hair whip
+    /// Compatible with all fishing rods including mod-added ones.
+    /// </summary>
+    private void TickFishingPhysics(Farmer farmer)
+    {
+        var rod = farmer.CurrentTool as FishingRod;
+        var rodActive = rod is not null;
+
+        bool bobberInAir   = rod?.castedButBobberStillInAir ?? false;
+        bool fishBiting    = rod?.isFishing ?? false;
+        bool fishCaught    = rod?.fishCaught ?? false;
+
+        var key = this.GetCharacterKey(farmer);
+
+        // Cast start: bobber just entered the air → body leans forward, hair sweeps out
+        if (bobberInAir && !this.wasBobberInAir)
+        {
+            var castDir = farmer.FacingDirection switch
+            {
+                0 => new Vector2(0f, -0.40f),
+                1 => new Vector2( 0.40f, 0f),
+                2 => new Vector2(0f,  0.40f),
+                3 => new Vector2(-0.40f, 0f),
+                _ => Vector2.Zero
+            };
+
+            var existing = this.bodyImpulse.TryGetValue(key, out var bi) ? bi : Vector2.Zero;
+            this.bodyImpulse[key] = existing + castDir * 0.55f;
+
+            if (this.config.EnableHairPhysics)
+            {
+                var hi = this.hairImpulse.TryGetValue(key, out var hExist) ? hExist : Vector2.Zero;
+                this.hairImpulse[key] = hi + castDir * (this.config.HairStrength * 1.2f);
+            }
+
+            if (this.config.EnableClothingFlowPhysics)
+            {
+                var ci = this.clothingImpulse.TryGetValue(key, out var cExist) ? cExist : Vector2.Zero;
+                this.clothingImpulse[key] = ci + castDir * (this.config.ClothingFlowStrength * 0.55f);
+            }
+        }
+
+        // Bobber just landed in water (stopped being in air) → body settles with small jolt
+        if (!bobberInAir && this.wasBobberInAir && rodActive)
+        {
+            var existing = this.bodyImpulse.TryGetValue(key, out var bi) ? bi : Vector2.Zero;
+            this.bodyImpulse[key] = existing + new Vector2(
+                (Game1.random.NextSingle() - 0.5f) * 0.08f,
+                0.10f); // small downward settle
+        }
+
+        // Fish biting (isFishing just became true — fish is on the hook): body twitch
+        if (fishBiting && !this.wasFishBiting)
+        {
+            var existing = this.bodyImpulse.TryGetValue(key, out var bi) ? bi : Vector2.Zero;
+            this.bodyImpulse[key] = existing + new Vector2(
+                (Game1.random.NextSingle() - 0.5f) * 0.12f,
+                -0.18f); // body jolts as fish pulls down
+            if (this.config.EnableHairPhysics)
+            {
+                var hi = this.hairImpulse.TryGetValue(key, out var hExist) ? hExist : Vector2.Zero;
+                this.hairImpulse[key] = hi + new Vector2(
+                    (Game1.random.NextSingle() - 0.5f) * 0.10f, -0.14f) * this.config.HairStrength;
+            }
+        }
+
+        // Ongoing reel strain: tiny pulse every ~8 ticks while fishing
+        if (fishBiting && !fishCaught && Game1.ticks % 8 == key % 8)
+        {
+            var existing = this.bodyImpulse.TryGetValue(key, out var bi) ? bi : Vector2.Zero;
+            this.bodyImpulse[key] = existing + new Vector2(
+                (Game1.random.NextSingle() - 0.5f) * 0.04f,
+                (Game1.random.NextSingle() - 0.5f) * 0.04f); // struggle micro-jitter
+        }
+
+        // Fish just caught: body snaps back from released tension + hair whips back
+        if (fishCaught && !this.wasFishCaught && rodActive)
+        {
+            var snapDir = farmer.FacingDirection switch
+            {
+                0 => new Vector2(0f,  0.45f),  // was pulling forward → snap back downward
+                1 => new Vector2(-0.45f, 0f),
+                2 => new Vector2(0f, -0.45f),
+                3 => new Vector2( 0.45f, 0f),
+                _ => new Vector2(0f,  0.35f)
+            };
+
+            var existing = this.bodyImpulse.TryGetValue(key, out var bi) ? bi : Vector2.Zero;
+            this.bodyImpulse[key] = existing + snapDir * 0.65f;
+
+            if (this.config.EnableHairPhysics)
+            {
+                var hi = this.hairImpulse.TryGetValue(key, out var hExist) ? hExist : Vector2.Zero;
+                this.hairImpulse[key] = hi + snapDir * (this.config.HairStrength * 1.4f);
+            }
+
+            if (this.config.EnableClothingFlowPhysics)
+            {
+                var ci = this.clothingImpulse.TryGetValue(key, out var cExist) ? cExist : Vector2.Zero;
+                this.clothingImpulse[key] = ci + snapDir * (this.config.ClothingFlowStrength * 0.65f);
+            }
+        }
+
+        this.wasFishingRodActive = rodActive;
+        this.wasBobberInAir      = bobberInAir;
+        this.wasFishBiting       = fishBiting;
+        this.wasFishCaught       = fishCaught;
+    }
+
+    /// <summary>
+    /// When the player casts a fishing rod, checks if any NPC, monster, or farm animal is
+    /// standing in the cast path (ahead of the player within cast range ~4 tiles).
+    /// If so, applies a harmless cosmetic knockdown: the target stumbles briefly.
+    /// No damage, no relationship change, no gameplay side-effects — purely visual comedy.
+    /// Works with all NPCs and modded characters within the cast range.
+    /// </summary>
+    private void TryBobberBonk(Farmer player)
+    {
+        if (Game1.currentLocation is null) return;
+
+        // Cast direction based on facing
+        var castDir = player.FacingDirection switch
+        {
+            0 => new Vector2(0f, -1f),
+            1 => new Vector2(1f,  0f),
+            2 => new Vector2(0f,  1f),
+            3 => new Vector2(-1f, 0f),
+            _ => Vector2.Zero
+        };
+
+        const float bobberRange = 256f; // ~4 tiles
+        var ahead = player.Position + castDir * (bobberRange * 0.5f);
+
+        // Check NPCs (including pets, mod characters)
+        foreach (var character in this.EnumerateHumanoids(Game1.currentLocation))
+        {
+            if (character is Farmer) continue;
+            var distAhead = Vector2.Distance(character.Position, ahead);
+            if (distAhead > bobberRange * 0.6f) continue;
+
+            // Make sure it's generally in the cast direction (dot product check)
+            var toTarget = character.Position - player.Position;
+            if (toTarget.LengthSquared() > 0.001f)
+            {
+                var dot = Vector2.Dot(Vector2.Normalize(toTarget), castDir);
+                if (dot < 0.3f) continue; // not in front
+            }
+
+            this.ApplyBobberBonkKnockdown(character, castDir);
+        }
+
+        // Check monsters
+        foreach (var monster in this.EnumerateMonsters(Game1.currentLocation))
+        {
+            if (Vector2.Distance(monster.Position, player.Position) > bobberRange) continue;
+            var toTarget = monster.Position - player.Position;
+            if (toTarget.LengthSquared() > 0.001f)
+            {
+                var dot = Vector2.Dot(Vector2.Normalize(toTarget), castDir);
+                if (dot < 0.3f) continue;
+            }
+
+            this.ApplyBobberBonkKnockdown(monster, castDir);
+        }
+
+        // Check farm animals
+        foreach (var animal in EnumerateFarmAnimals(Game1.currentLocation))
+        {
+            if (Vector2.Distance(animal.Position, player.Position) > bobberRange) continue;
+            var key = this.GetCharacterKey(animal);
+            var bodyEntry = this.bodyImpulse.TryGetValue(key, out var bi) ? bi : Vector2.Zero;
+            this.bodyImpulse[key] = bodyEntry + castDir * 0.35f;
+            this.farmAnimalKnockdown[key] = new NpcKnockdownState
+            {
+                Impulse = castDir * (this.config.RagdollKnockbackStrength * 0.35f),
+                TicksRemaining = 8
+            };
+        }
+    }
+
+    /// <summary>
+    /// Applies a "sit-down stumble" cosmetic knockdown to the given character from a bobber hit.
+    /// The character is knocked in the cast direction and briefly stumbles.
+    /// </summary>
+    private void ApplyBobberBonkKnockdown(Character character, Vector2 castDir)
+    {
+        var key = this.GetCharacterKey(character);
+        this.npcKnockdown[key] = new NpcKnockdownState
+        {
+            Impulse = castDir * (this.config.RagdollKnockbackStrength * 0.55f),
+            TicksRemaining = 14
+        };
+
+        var bodyEntry = this.bodyImpulse.TryGetValue(key, out var bi) ? bi : Vector2.Zero;
+        this.bodyImpulse[key] = bodyEntry + castDir * 0.5f;
+
+        if (this.config.EnableHairPhysics)
+        {
+            var hi = this.hairImpulse.TryGetValue(key, out var hExist) ? hExist : Vector2.Zero;
+            this.hairImpulse[key] = hi + castDir * (this.config.HairStrength * 0.8f);
+        }
+    } Heavy animals (cow, goat, sheep, pig, ostrich) get lower
     /// impulse and slower decay. Light animals (chicken, duck, rabbit) are bouncier.
     /// Compatible with all vanilla animals and any mod-added animals in Farm/AnimalHouse.
     /// </summary>
@@ -4071,8 +4400,20 @@ public sealed class ModEntry : Mod
             () => this.config.EnableLightningFlinch, v => this.config.EnableLightningFlinch = v,
             () => "Enable lightning flinch",
             () => "Sharp random-direction body flinch + electric hair whip + brief screen flash when lightning strikes outdoors.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableFishingPhysics, v => this.config.EnableFishingPhysics = v,
+            () => "Enable fishing physics",
+            () => "Fishing rod cast = body leans forward and hair sweeps out. Bobber splash = settle jolt. " +
+                  "Fish biting = body twitch. Ongoing reel struggle = micro-jitter. Catch snap-back = body recoil + hair whip. " +
+                  "Compatible with all fishing rods including mod-added ones.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableBobberBonk, v => this.config.EnableBobberBonk = v,
+            () => "Enable bobber bonk",
+            () => "Casting the fishing rod at an NPC, monster, or farm animal within ~4 tiles causes a harmless cosmetic knockdown. " +
+                  "The target stumbles and bounces — no damage, no relationship impact, purely silly. " +
+                  "Works with all NPCs and modded characters.");
 
-        // ── Combat hit VFX ────────────────────────────────────────────────────
+
         api.AddSectionTitle(this.ModManifest, () => "Combat Hit VFX");
         api.AddParagraph(this.ModManifest, () =>
             "Cosmetic particle effects and physics reactions on weapon/tool hits:\n" +
