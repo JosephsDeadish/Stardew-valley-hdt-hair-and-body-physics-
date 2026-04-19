@@ -21,7 +21,10 @@ on:
         type: boolean
         default: false
   push:
+    branches: ['main']
     tags: ['v*.*.*']
+  pull_request:
+    branches: ['main']
 
 permissions:
   contents: write   # needed to create releases and upload assets
