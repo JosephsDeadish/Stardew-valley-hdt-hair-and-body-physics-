@@ -13,8 +13,8 @@ public sealed class ModEntry : Mod
 {
     // ── Per-character physics state ───────────────────────────────────────────
     private readonly Dictionary<int, Vector2> lastPositions = new();
-    private readonly Dictionary<int, Vector2> bodyImpulse = new();
-    private readonly Dictionary<int, Vector2> hairImpulse = new();
+    private readonly Dictionary<int, Vector2> bodyImpulse = new();        // external force accumulator (body center)
+    private readonly Dictionary<int, Vector2> hairImpulse = new();        // hair root external force
     private readonly Dictionary<int, Vector2> clothingImpulse = new();
     private readonly Dictionary<int, Vector2> monsterBodyImpulse = new();
     private readonly Dictionary<int, NpcKnockdownState> npcKnockdown = new();
@@ -22,6 +22,10 @@ public sealed class ModEntry : Mod
     private readonly List<PhysicsPreset> presets = new();
     private readonly List<MonsterArchetypeRule> monsterArchetypeRules = new();
     private readonly List<DebrisWeightRule> debrisWeightRules = new();
+
+    // ── Per-bone spring state (real spring-damper per body part) ──────────────
+    private readonly Dictionary<int, BoneGroup> boneGroups   = new();
+    private readonly Dictionary<int, HairChain> hairChains   = new();
 
     // ── Environmental physics state ───────────────────────────────────────────
     private Vector2 grassBendDisplacement = Vector2.Zero;
@@ -150,11 +154,12 @@ public sealed class ModEntry : Mod
     private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
     {
         this.Monitor.Log("╔══════════════════════════════════════════════════════════════╗", LogLevel.Info);
-        this.Monitor.Log("║  SVP Physics, Collisions, Hitstops, Idles, Ragdolls — v0.4.0 ║", LogLevel.Info);
-        this.Monitor.Log("║  Successfully initialized.                                   ║", LogLevel.Info);
+        this.Monitor.Log("║  SVP Physics, Collisions, Hitstops, Idles, Ragdolls — v0.5.0 ║", LogLevel.Info);
+        this.Monitor.Log("║  Spring-damper per-bone engine active.                       ║", LogLevel.Info);
         this.Monitor.Log("╠══════════════════════════════════════════════════════════════╣", LogLevel.Info);
         this.Monitor.Log($"║  Body physics:           {(this.config.EnableBodyPhysics ? "ON " : "OFF")}", LogLevel.Info);
-        this.Monitor.Log($"║  Hair physics (HDT):     {(this.config.EnableHairPhysics ? "ON " : "OFF")}", LogLevel.Info);
+        this.Monitor.Log($"║  Hair physics (chain):   {(this.config.EnableHairPhysics ? "ON " : "OFF")} ({this.config.HairChainSegments} segments)", LogLevel.Info);
+        this.Monitor.Log($"║  Bone stiffness:         {this.config.BoneStiffness:F2}  damping: {this.config.BoneDamping:F2}", LogLevel.Info);
         this.Monitor.Log($"║  Clothing flow physics:  {(this.config.EnableClothingFlowPhysics ? "ON " : "OFF")}", LogLevel.Info);
         this.Monitor.Log($"║  Idle motion:            {(this.config.EnableIdleMotion ? "ON " : "OFF")} (interval: {this.config.IdleMotionIntervalTicks} ticks)", LogLevel.Info);
         this.Monitor.Log($"║  Hitstop + hit flash:    {(this.config.EnableHitstopEffect ? "ON " : "OFF")}", LogLevel.Info);
@@ -204,31 +209,51 @@ public sealed class ModEntry : Mod
 
         foreach (var character in this.EnumerateHumanoids(Game1.currentLocation))
         {
-            var key = this.GetCharacterKey(character);
-            if (!this.bodyImpulse.TryGetValue(key, out var impulse))
+            var key     = this.GetCharacterKey(character);
+            var profile = this.detector.Resolve(character);
+
+            // ── Per-bone spring displacement (primary physics signal) ───────
+            Vector2 boneOffset = Vector2.Zero;
+            if (this.boneGroups.TryGetValue(key, out var group) && !group.IsAllNearRest())
             {
-                continue;
+                boneOffset = group.ComputeVisualDisplacement(profile);
             }
 
-            var mag = impulse.Length();
-            if (mag < 0.015f) // ignore negligible micro-impulses
+            // ── Hair chain tip drives additional body-sway contribution ─────
+            // Hair being flung around pulls the body a tiny bit in the same direction.
+            Vector2 hairOffset = Vector2.Zero;
+            if (this.config.EnableHairPhysics
+                && this.hairChains.TryGetValue(key, out var chain)
+                && !chain.IsNearRest())
             {
-                continue;
+                hairOffset = chain.GetTipDisplacement() * 0.18f * this.config.HairStrength;
             }
 
-            // Blend body impulse + clothing flow impulse for final visual offset.
-            // Clothing adds a trailing/flowing layer on top of the body wobble.
-            // The clothing contribution is capped separately so flowy clothing can
-            // flow a bit beyond the body without exceeding the overall pixel cap.
-            var clothingImp = (this.config.EnableClothingFlowPhysics && this.clothingImpulse.TryGetValue(key, out var ci))
-                ? ci * 0.42f   // clothing adds up to ~42% extra visual displacement on top of body
+            // ── Clothing flow ────────────────────────────────────────────────
+            var clothingOffset = (this.config.EnableClothingFlowPhysics && this.clothingImpulse.TryGetValue(key, out var ci))
+                ? ci * 0.42f
                 : Vector2.Zero;
-            var blendedImpulse = impulse + clothingImp;
 
-            // Scale up to screen-pixel range, then clamp
+            // ── Fallback: legacy body impulse (for any code paths not yet ───
+            //    driving the spring engine, e.g. monster body, clothing-only)
+            var legacyImpulse = this.bodyImpulse.TryGetValue(key, out var li) ? li : Vector2.Zero;
+
+            // Blend: bone spring is primary; legacy impulse fills the gap if bones are at rest
+            var primaryOffset = (boneOffset.LengthSquared() > legacyImpulse.LengthSquared())
+                ? boneOffset
+                : legacyImpulse;
+
+            var blended = primaryOffset + hairOffset + clothingOffset;
+
+            if (blended.LengthSquared() < 0.015f * 0.015f)
+            {
+                continue; // skip negligible wobble
+            }
+
+            // Scale to screen pixels and hard-cap
             var visualOffset = new Vector2(
-                Math.Clamp(blendedImpulse.X * PhysicsVisualScale, -PhysicsVisualMaxPx, PhysicsVisualMaxPx),
-                Math.Clamp(blendedImpulse.Y * PhysicsVisualScale, -PhysicsVisualMaxPx, PhysicsVisualMaxPx));
+                Math.Clamp(blended.X * PhysicsVisualScale, -PhysicsVisualMaxPx, PhysicsVisualMaxPx),
+                Math.Clamp(blended.Y * PhysicsVisualScale, -PhysicsVisualMaxPx, PhysicsVisualMaxPx));
 
             this.savedPhysicsPositions[character] = character.Position;
             character.Position += visualOffset;
@@ -645,6 +670,11 @@ public sealed class ModEntry : Mod
         this.monsterBodyImpulse.Clear();
         this.npcKnockdown.Clear();
         this.farmAnimalKnockdown.Clear();
+        // Reset per-bone spring state
+        foreach (var bg in this.boneGroups.Values) bg.Reset();
+        this.boneGroups.Clear();
+        foreach (var hc in this.hairChains.Values) hc.Reset();
+        this.hairChains.Clear();
         this.grassBendDisplacement = Vector2.Zero;
         this.grassBendVelocity = Vector2.Zero;
         this.hitstopTicksRemaining = 0;
@@ -1614,6 +1644,8 @@ public sealed class ModEntry : Mod
             impulse += new Vector2(-velocity.X, -velocity.Y) * (0.05f + baseStrength * 0.06f);
             impulse *= 0.82f;
             this.bodyImpulse[key] = impulse;
+            // Also drive spring bones (water still moves body parts around)
+            this.StepBoneGroup(key, profile, impulse * 0.5f);
             return;
         }
 
@@ -1627,7 +1659,28 @@ public sealed class ModEntry : Mod
         };
 
         this.bodyImpulse[key] = impulse;
+
+        // ── Drive per-bone spring simulation ──────────────────────────────────
+        // The accumulated body impulse is the external force input to the spring engine.
+        // Each bone distributes this force with its own anatomical scaling.
+        this.StepBoneGroup(key, profile, impulse);
     }
+
+    /// <summary>
+    /// Advance (or lazily create) the BoneGroup for this character by one tick.
+    /// The external force is the body-center impulse computed by SimulateBody.
+    /// </summary>
+    private void StepBoneGroup(int key, BodyProfileType profile, Vector2 externalForce)
+    {
+        if (!this.boneGroups.TryGetValue(key, out var group))
+        {
+            group = new BoneGroup();
+            this.boneGroups[key] = group;
+        }
+
+        group.Step(profile, externalForce, this.config.BoneStiffness, this.config.BoneDamping, this.config);
+    }
+
 
     // ── Monster body physics ──────────────────────────────────────────────────
 
@@ -2663,6 +2716,35 @@ public sealed class ModEntry : Mod
         impulse *= 0.88f;
 
         this.hairImpulse[key] = impulse;
+
+        // ── Drive hair chain spring simulation ────────────────────────────────
+        // The accumulated hair impulse is the external force applied to the chain root.
+        // The chain propagates it down through segments with attenuation and spring lag.
+        this.StepHairChain(key, impulse, velocity);
+    }
+
+    /// <summary>
+    /// Advance (or lazily create) the HairChain for this character by one tick.
+    /// Accumulates all sources that wrote to hairImpulse[key] plus movement-driven force.
+    /// </summary>
+    private void StepHairChain(int key, Vector2 rootForce, Vector2 characterVelocity)
+    {
+        if (!this.hairChains.TryGetValue(key, out var chain))
+        {
+            // Recreate chain if segment count changed in config
+            chain = new HairChain(this.config.HairChainSegments);
+            this.hairChains[key] = chain;
+        }
+        else if (chain.SegmentCount != this.config.HairChainSegments)
+        {
+            // Config changed at runtime — rebuild (GMCM slider moved)
+            chain = new HairChain(this.config.HairChainSegments);
+            this.hairChains[key] = chain;
+        }
+
+        // External force = accumulated hair impulse (scaled down so it fits the spring model)
+        var chainForce = rootForce * 0.60f;
+        chain.Step(chainForce, this.config.HairChainStiffness, this.config.HairChainDamping);
     }
 
     // ── Idle motion ───────────────────────────────────────────────────────────
@@ -4148,6 +4230,22 @@ public sealed class ModEntry : Mod
             () => "Instantly applies a full set of physics strength values.",
             allowedValues: this.presets.Count > 0 ? this.presets.Select(p => p.Name).ToArray() : new[] { "Default" });
 
+        // ── Spring-Damper Physics Engine ─────────────────────────────────────
+        api.AddSectionTitle(this.ModManifest, () => "Spring Physics Engine");
+        api.AddParagraph(this.ModManifest, () =>
+            "Controls the real spring-damper simulation behind all body-part jiggles. " +
+            "Each bone (breast, butt, belly, thighs, groin) has its own spring. " +
+            "Stiffness = how fast bones snap back. Damping = how many oscillation cycles before settling. " +
+            "Tip: low stiffness + low damping = ultra-jelly. High stiffness + high damping = tight realistic bounce.");
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.BoneStiffness, v => this.config.BoneStiffness = v,
+            () => "Bone stiffness",
+            () => "Spring constant k. Lower = softer/jelly, bones take longer to return to rest. Higher = firm snap-back. Range 0.04–0.35. Default 0.12.", 0.04f, 0.35f, 0.01f);
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.BoneDamping, v => this.config.BoneDamping = v,
+            () => "Bone damping",
+            () => "Damping coefficient c. Lower = more oscillation cycles / jelly bouncing. Higher = one-shot settle. Range 0.03–0.25. Default 0.08.", 0.03f, 0.25f, 0.01f);
+
         // ── Feminine body strengths ───────────────────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "Feminine Physics Strength");
         api.AddNumberOption(this.ModManifest,
@@ -4196,6 +4294,19 @@ public sealed class ModEntry : Mod
             () => this.config.HairDampeningIndoors, v => this.config.HairDampeningIndoors = v,
             () => "Indoor dampening",
             () => "Multiplier indoors. Lower = calmer hair inside buildings.", 0f, 1f, 0.05f);
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.HairChainStiffness, v => this.config.HairChainStiffness = v,
+            () => "Hair chain stiffness",
+            () => "Spring return speed for hair chain segments. Lower = looser, more flowing hair. Range 0.03–0.25.", 0.03f, 0.25f, 0.01f);
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.HairChainDamping, v => this.config.HairChainDamping = v,
+            () => "Hair chain damping",
+            () => "How quickly hair stops oscillating. Lower = more swinging cycles. Range 0.03–0.20.", 0.03f, 0.20f, 0.01f);
+        api.AddNumberOption(this.ModManifest,
+            () => (float)this.config.HairChainSegments,
+            v => this.config.HairChainSegments = (int)Math.Round(v),
+            () => "Hair chain segments",
+            () => "Number of spring links in the hair chain. More = smoother cascade. 2 = stiff, 8 = very flowing.", 2f, 8f, 1f);
 
         // ── Ragdoll & knockback ───────────────────────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "Ragdoll & Knockback");

@@ -164,6 +164,39 @@ public sealed class ModConfig
     /// </summary>
     public float IdleMotionStrength { get; set; } = 1.0f;
 
+    // ── Spring-damper physics engine ─────────────────────────────────────────
+    /// <summary>
+    /// Per-bone spring stiffness (k). Controls how fast each bone returns to rest.
+    /// Lower = more jiggly / longer oscillation. Higher = firm snap-back.
+    /// Range 0.04–0.35. Default 0.12 = realistic soft jelly.
+    /// </summary>
+    public float BoneStiffness { get; set; } = 0.12f;
+
+    /// <summary>
+    /// Per-bone damping coefficient (c). Controls how quickly oscillation dies out.
+    /// Lower = more bouncing cycles. Higher = one-shot settle.
+    /// Range 0.03–0.25. Default 0.08 = jelly with 3–4 visible oscillation cycles.
+    /// </summary>
+    public float BoneDamping { get; set; } = 0.08f;
+
+    /// <summary>
+    /// Hair chain spring stiffness. Lower = hair hangs looser / more flowing.
+    /// Range 0.03–0.25. Default 0.07.
+    /// </summary>
+    public float HairChainStiffness { get; set; } = 0.07f;
+
+    /// <summary>
+    /// Hair chain damping. Lower = hair keeps swinging longer.
+    /// Range 0.03–0.20. Default 0.07.
+    /// </summary>
+    public float HairChainDamping { get; set; } = 0.07f;
+
+    /// <summary>
+    /// Number of spring segments in the hair chain. More segments = smoother flowing cascade.
+    /// Each additional segment adds a tiny simulation cost. Range 2–8. Default 5.
+    /// </summary>
+    public int HairChainSegments { get; set; } = 5;
+
     // ── Presets ───────────────────────────────────────────────────────────────
     public string Preset { get; set; } = "Default";
 

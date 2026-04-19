@@ -1,7 +1,7 @@
 {
   "Name": "SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More",
   "Author": "JosephsDeadish",
-  "Version": "0.4.0",
+  "Version": "0.5.0",
   "Description": "Full-featured physics mod for Stardew Valley 1.5.6 – 1.6+. Body jiggle (feminine & masculine), HDT hair physics, per-profile cycling idle animations (female/male/androgynous 8-step cycles), per-archetype monster idles (Slime pulse, Bat wing-twitch, Skeleton rattle, Dragon breathing, Elemental energy pulse, etc.), farm animal idles (chicken peck, cow tail swish, rabbit ear twitch, etc.), run-step impulses, clothing flow physics, ragdoll knockback with clothing scatter and item drop, tool collision hitstop + swing-back on stone/metal, spark VFX on hard hits, slime spray VFX, blood splatter VFX (all toggleable in MCM), hitstop flash, NPC sword knockdown, environmental physics, debris physics. Detects and integrates 12+ weather mods (More Rain, Climate of Ferngill, Wind Effects, Cloudy Skies, SVE, etc.). Works with Fashion Sense, LewdEW, Valley Girls, XTardew, HornyFur, Creatures & Cuties, Ridgeside Village, East Scarp, Stardew Valley Expanded, and all sprite/hair/creature mods. Stardew 1.5.6 and 1.6.x both supported.",
   "UniqueID": "JosephsDeadish.StardewHdtPhysics",
   "EntryDll": "SVPPhysics.dll",
