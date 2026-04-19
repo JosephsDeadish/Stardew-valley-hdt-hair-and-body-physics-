@@ -54,11 +54,15 @@ jobs:
       - name: Install SteamCMD
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends lib32gcc-s1
+          sudo apt-get install -y --no-install-recommends \
+            lib32gcc-s1 \
+            lib32stdc++6 \
+            libc6-i386
           sudo mkdir -p /usr/games
           curl -sqL "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz" \
             | sudo tar xz -C /usr/games
           sudo chmod +x /usr/games/steamcmd.sh
+          sudo chmod +x /usr/games/linux32/steamcmd
           echo "SteamCMD installed at /usr/games/steamcmd.sh"
 
       - name: Download Stardew Valley via SteamCMD
