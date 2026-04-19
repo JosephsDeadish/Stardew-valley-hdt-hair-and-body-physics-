@@ -14,6 +14,7 @@ public sealed class ModConfig
     public bool EnableEnvironmentalPhysics { get; set; } = true;
     public bool EnableItemCollisionPhysics { get; set; } = true;
     public bool EnableWindDetection { get; set; } = true;
+    public bool EnableHitDirectionalImpulse { get; set; } = true;
 
     // ── Feminine body strengths ───────────────────────────────────────────────
     public float FemaleBreastStrength { get; set; } = 0.55f;

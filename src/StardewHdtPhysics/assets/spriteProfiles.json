@@ -11,6 +11,9 @@
   { "CharacterName": "",          "SpriteTextureContains": "furfur",       "ProfileType": "Feminine" },
   { "CharacterName": "",          "SpriteTextureContains": "anthro",       "ProfileType": "Androgynous" },
 
+  { "CharacterName": "",          "SpriteTextureContains": "nova",         "ProfileType": "Androgynous" },
+  { "CharacterName": "",          "SpriteTextureContains": "nova_valley",  "ProfileType": "Androgynous" },
+
   { "CharacterName": "",          "SpriteTextureContains": "beastgirl",    "ProfileType": "Feminine" },
   { "CharacterName": "",          "SpriteTextureContains": "beast_girl",   "ProfileType": "Feminine" },
   { "CharacterName": "",          "SpriteTextureContains": "slimegirl",    "ProfileType": "Feminine" },

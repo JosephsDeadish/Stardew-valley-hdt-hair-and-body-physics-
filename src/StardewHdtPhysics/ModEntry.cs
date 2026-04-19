@@ -29,6 +29,9 @@ public sealed class ModEntry : Mod
     private float currentRainStrength = 0f;
     private float currentSnowStrength = 0f;
 
+    // ── Hit tracking ──────────────────────────────────────────────────────────
+    private int lastPlayerHealth = -1;
+
     // ── Optional mod integrations ─────────────────────────────────────────────
     private bool fashionSenseLoaded = false;
 
@@ -76,6 +79,17 @@ public sealed class ModEntry : Mod
         if (!Context.IsWorldReady || Game1.currentLocation is null)
         {
             return;
+        }
+
+        // Track player health — detect damage taken for directional hit impulse
+        if (this.config.EnableHitDirectionalImpulse && this.config.EnableBodyPhysics && Game1.player is not null)
+        {
+            var hp = Game1.player.health;
+            if (this.lastPlayerHealth >= 0 && hp < this.lastPlayerHealth)
+            {
+                this.ApplyHitImpulse(Game1.player, this.lastPlayerHealth - hp);
+            }
+            this.lastPlayerHealth = hp;
         }
 
         if (e.IsMultipleOf(300))
@@ -386,6 +400,16 @@ public sealed class ModEntry : Mod
         };
 
         impulse += new Vector2(-velocity.X, -velocity.Y) * (0.03f + (baseStrength * 0.04f));
+
+        // Swimming: water resistance — stronger movement wave but rapid oscillations are damped
+        if (character is Farmer swimmingFarmer && swimmingFarmer.swimming.Value)
+        {
+            impulse += new Vector2(-velocity.X, -velocity.Y) * (0.05f + baseStrength * 0.06f);
+            impulse *= 0.82f;
+            this.bodyImpulse[key] = impulse;
+            return;
+        }
+
         impulse *= 0.86f;
 
         this.bodyImpulse[key] = impulse;
@@ -504,7 +528,87 @@ public sealed class ModEntry : Mod
         return MonsterPhysicsArchetype.Generic;
     }
 
-    // ── Farm animal physics ───────────────────────────────────────────────────
+    // ── Hit directional impulse ───────────────────────────────────────────────
+
+    /// <summary>
+    /// Applies a directional body and hair impulse when the player takes damage.
+    /// Identifies the nearest attacker within ~6 tiles and creates an impulse FROM the attacker
+    /// TOWARD the player, modeling body parts flying away from the impact source then bouncing back:
+    ///   - Skeleton smacks from the left → boobs/butt fly right then spring back
+    ///   - Slime hits the belly → belly ripples outward from contact point
+    ///   - Explosion → radial push from closest corner of blast radius
+    ///   - Trap/floor hazard → direction inferred from last movement
+    /// Damage fraction of max HP determines impulse magnitude (heavy hit = more jiggle).
+    /// </summary>
+    private void ApplyHitImpulse(Farmer player, int damage)
+    {
+        if (!this.config.EnableBodyPhysics)
+        {
+            return;
+        }
+
+        var playerKey = this.GetCharacterKey(player);
+        var profile = this.detector.Resolve(player);
+        var baseStrength = profile switch
+        {
+            BodyProfileType.Feminine => (this.config.FemaleBreastStrength + this.config.FemaleButtStrength
+                + this.config.FemaleThighStrength + this.config.FemaleBellyStrength) / 4f,
+            BodyProfileType.Masculine => (this.config.MaleButtStrength + this.config.MaleGroinStrength
+                + this.config.MaleThighStrength + this.config.MaleBellyStrength) / 4f,
+            _ => 0.35f
+        };
+
+        // Find nearest monster as likely attacker (within ~6 tiles = 192 pixels)
+        Vector2 attackDir = Vector2.Zero;
+        float closestDist = float.MaxValue;
+        if (Game1.currentLocation is not null)
+        {
+            foreach (var npc in this.EnumerateMonsters(Game1.currentLocation))
+            {
+                var dist = Vector2.Distance(npc.Position, player.Position);
+                if (dist < closestDist && dist < 192f)
+                {
+                    closestDist = dist;
+                    // FROM monster TOWARD player — direction body parts are thrown by the hit
+                    attackDir = player.Position - npc.Position;
+                }
+            }
+        }
+
+        // Fall back to last-frame velocity (traps, explosions, floor hazards)
+        if (attackDir.LengthSquared() < 0.001f)
+        {
+            if (this.lastPositions.TryGetValue(playerKey, out var lastPos))
+            {
+                attackDir = player.Position - lastPos;
+            }
+        }
+
+        if (attackDir.LengthSquared() < 0.001f)
+        {
+            return;
+        }
+
+        attackDir = Vector2.Normalize(attackDir);
+        if (float.IsNaN(attackDir.X) || float.IsNaN(attackDir.Y))
+        {
+            return;
+        }
+
+        // Scale to damage fraction of max HP so heavy hits cause more jiggle than chip damage
+        var damageFactor = Math.Clamp((float)damage / Math.Max(1, player.maxHealth) * 8f, 0.1f, 1.5f);
+        var hitImpulse = attackDir * (baseStrength * damageFactor * 0.55f);
+
+        var existing = this.bodyImpulse.TryGetValue(playerKey, out var bi) ? bi : Vector2.Zero;
+        this.bodyImpulse[playerKey] = existing + hitImpulse;
+
+        // Hair also reacts — whips toward impact direction then settles
+        if (this.config.EnableHairPhysics)
+        {
+            var hairExisting = this.hairImpulse.TryGetValue(playerKey, out var hi) ? hi : Vector2.Zero;
+            this.hairImpulse[playerKey] = hairExisting + hitImpulse * (this.config.HairStrength * 0.7f);
+        }
+    }
 
     /// <summary>
     /// Body jiggle for farm animals. Heavy animals (cow, goat, sheep, pig, ostrich) get lower
@@ -623,6 +727,17 @@ public sealed class ModEntry : Mod
 
         var windMult = this.GetHairWindMultiplier();
         var isOutdoors = Game1.currentLocation?.IsOutdoors == true;
+
+        // Swimming: hair fans out and floats in water (buoyant gentle spread, slow oscillation)
+        if (character is Farmer swimmingFarmer && swimmingFarmer.swimming.Value)
+        {
+            impulse += new Vector2(
+                (Game1.random.NextSingle() - 0.5f) * 0.015f,
+                -(Game1.random.NextSingle() * 0.012f)) * this.config.HairStrength;
+            impulse *= 0.93f;
+            this.hairImpulse[key] = impulse;
+            return;
+        }
 
         // Rain: heavier hair — downward droop, dampened lateral flow
         if (this.currentRainStrength > 0f && isOutdoors)
@@ -898,6 +1013,7 @@ public sealed class ModEntry : Mod
         {
             Pickaxe     => 0.10f,
             Axe         => 0.08f,
+            MeleeWeapon mw when mw.Name.Contains("Scythe", StringComparison.OrdinalIgnoreCase) => 0.09f,
             MeleeWeapon => 0.06f,
             Hoe         => 0.04f,
             _           => 0.03f
@@ -986,6 +1102,11 @@ public sealed class ModEntry : Mod
             () => this.config.EnableWindDetection, v => { this.config.EnableWindDetection = v; this.UpdateWindStrength(); },
             () => "Enable wind detection",
             () => "Boosts hair and grass physics on windy/rainy/snowy days. Reads game weather, season, and wind mods.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableHitDirectionalImpulse, v => this.config.EnableHitDirectionalImpulse = v,
+            () => "Enable hit directional impulse",
+            () => "Body parts and hair fly in the direction of the hit when the player takes damage. " +
+                  "Skeleton smacks → boobs/butt bounce away from the hand. Slime hit → belly ripple at impact point. Explosion → radial body push.");
 
         // ── Quick presets ─────────────────────────────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "Quick Presets");
