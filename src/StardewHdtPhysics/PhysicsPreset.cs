@@ -13,5 +13,7 @@ public sealed class PhysicsPreset
     public float MaleBellyStrength { get; set; }
     public float HairStrength { get; set; }
     public float RagdollKnockbackStrength { get; set; } = 1.5f;
+    public float MonsterArchetypeStrength { get; set; } = 0.55f;
+    public float FarmAnimalPhysicsStrength { get; set; } = 0.45f;
     public float EnvironmentalPhysicsStrength { get; set; } = 0.5f;
 }

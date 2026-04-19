@@ -13,11 +13,15 @@
 | **HDT Hair physics** | Flowing/bouncy motion on ALL hair types — vanilla, mod-added, and Fashion Sense hairs. Reacts to movement, wind, **rain** (wet/droopy), and **snow** (light flutter). Calmer indoors |
 | **Idle motion** | Subtle body sway every ~3 seconds when standing still; automatically cancels when you use a tool |
 | **Ragdoll knockback** | Configurable chance (default 50 %) to receive extra knockback force at ≤ 30 HP |
-| **Monster body physics** | Body jiggle for monsters with feminine sprite mods (beast girls, slime girls, funtari slimes, etc.) |
-| **Monster ragdoll** | Ragdoll-style knockback when monsters are struck; supports modded creatures |
-| **NPC sword knockdown** | Sword swings near NPCs apply a harmless cosmetic knockback — no damage, no anger |
-| **Environmental physics** | Grass bends when you walk through it; reacts to wind. Debris/rocks wobble when hit |
-| **Wind detection** | Reads game weather, season, and internal wind value. Boosts hair AND grass physics on windy/stormy days |
+| **Monster archetype physics** | Every monster type gets appropriate physics: **Slime** = bouncy jello, **Bat/Ghost** = floppy wings, **Serpent/Grub** = squishy stretch, **Fly/Bug** = wing+leg vibration, **Wolf/Bear** = fur ripple, **Skeleton** = snappy bone clatter. All generic monsters also get physics |
+| **Monster ragdoll** | Ragdoll-style knockback when monsters are struck; ragdolled monsters flatten grass they crash through |
+| **Female monster overlay** | Beast girls, slime girls, funtari slimes and similar mods additionally get humanoid body jiggle on top of their archetype physics |
+| **Farm animal physics** | Body jiggle for all farm animals: light (chicken, duck, rabbit) are bouncier; heavy (cow, sheep, pig) are more grounded. Sword/tool swings cause a cosmetic startle reaction — no damage |
+| **Pet physics** | Cats and dogs included automatically in humanoid NPC physics |
+| **NPC sword knockdown** | Sword swings near NPCs/pets apply a harmless cosmetic knockback — no damage, no anger |
+| **Environmental physics** | Grass bends when you walk through it, flattens under ragdolled bodies, and is disturbed by tool swings |
+| **Item collision physics** | Tool swings disturb grass/debris based on tool weight: pickaxe=heavy rock impact, scythe=wide light sweep, sword=lateral knock. Rock (heavy, round) rolls differently from stick (light, tumbles) |
+| **Wind detection** | Reads game weather, season, and internal wind value. Boosts hair AND grass physics on windy/rainy/stormy days |
 | **Auto profile detection** | Reads live sprite texture names to detect replacer mods; falls back to game gender data |
 | **Manual overrides** | Per-NPC gender override in `config.json` — you always have the final say |
 | **Preset system** | Soft / Default / High presets, selectable in GMCM or via `config.json` |
@@ -67,15 +71,17 @@ Edit `Mods/StardewHdtPhysics/config.json` after the first launch:
 ```jsonc
 {
   // ── System toggles ──────────────────────────────────────────────────────────
-  "EnableBodyPhysics":        true,
-  "EnableHairPhysics":        true,
-  "EnableRagdollKnockback":   true,
-  "EnableIdleMotion":         true,
-  "EnableMonsterBodyPhysics": true,   // body jiggle for monsters w/ female sprite mods
-  "EnableMonsterRagdoll":     true,   // ragdoll knockback for all monsters
-  "EnableNpcSwordKnockdown":  true,   // harmless cosmetic knockback when sword-swinging near NPCs
-  "EnableEnvironmentalPhysics": true, // grass bend, debris wobble
-  "EnableWindDetection":      true,   // boost hair+grass physics on windy/rainy/snowy days
+  "EnableBodyPhysics":          true,
+  "EnableHairPhysics":          true,
+  "EnableRagdollKnockback":     true,
+  "EnableIdleMotion":           true,
+  "EnableMonsterBodyPhysics":   true,   // archetype physics for ALL monsters
+  "EnableMonsterRagdoll":       true,   // ragdoll knockback for all monsters
+  "EnableNpcSwordKnockdown":    true,   // harmless cosmetic knockback near NPCs/pets
+  "EnableFarmAnimalPhysics":    true,   // jiggle + tool collision for farm animals
+  "EnableEnvironmentalPhysics": true,   // grass bend, ragdoll flattening
+  "EnableItemCollisionPhysics": true,   // tool swings disturb grass by tool weight
+  "EnableWindDetection":        true,   // boost hair+grass on windy/rainy/snowy days
 
   // ── Preset (overrides all individual strengths) ──────────────────────────────
   "Preset": "Default",               // "Soft" | "Default" | "High"
@@ -103,6 +109,14 @@ Edit `Mods/StardewHdtPhysics/config.json` after the first launch:
   "RagdollChanceUnderLowHealth": 0.50,  // 0 = never, 1 = always (at ≤30 HP)
   "RagdollKnockbackStrength":    1.50,  // push distance (1.5 = default, 4 = extreme)
   "NpcSwordKnockdownChance":     0.40,  // 0 = never, 1 = always (cosmetic only)
+
+  // ── Monster physics ──────────────────────────────────────────────────────────
+  // Archetype auto-detected from name: slime/jello/bat/worm/bug/furry/skeleton/generic
+  "MonsterArchetypeStrength": 0.55,
+
+  // ── Farm animal physics ──────────────────────────────────────────────────────
+  // All vanilla + mod-added farm animals. Heavy (cow/pig) vs light (chicken/rabbit)
+  "FarmAnimalPhysicsStrength": 0.45,
 
   // ── Environmental physics ────────────────────────────────────────────────────
   "EnvironmentalPhysicsStrength": 0.50, // grass/debris intensity (0 = off, 2 = max)
@@ -135,8 +149,20 @@ The mod detects sprite mods by reading live texture asset names at runtime. Buil
 | Slime girl monsters | `slimegirl`, `slime_girl` | Feminine |
 | Funtari slimes | `funtarislime`, `funtari_slime` | Feminine |
 | Monster girl packs | `monstergirl`, `monster_girl` | Feminine |
+| Creatures and Cuties | `creaturescuties`, `creatures_cuties`, `creaturecute` | Androgynous |
+| Pokémon mods | `pokemon`, `stardew_pokemon` | Androgynous |
 
-If your replacer uses a keyword not in the list, add an entry to `GenderOverrides` in `config.json` or extend `assets/spriteProfiles.json` directly.
+Monster archetype rules are in `assets/monsterArchetypes.json` (name keyword → physics model):
+
+| Archetype | Detected by name containing | Physics model |
+|---|---|---|
+| Slime | Slime, Jelly, Sludge, Blob, Ooze | Bouncy jello — high impulse, slow decay, random wobble |
+| Bat | Bat, Ghost, Haunted, Skull, Wisp | Floppy wing flutter — lateral oscillation, fast snap-back |
+| Worm | Serpent, Grub, Duggy, Larva, Crawler | Squishy stretch — Y-axis dominant compression/extension |
+| FlyingBug | Fly, Bug, Moth, Butterfly, Bee | Wing/leg vibration — rapid micro-oscillation |
+| Furry | Wolf, Bear, Fox, Yeti | Fur ripple — gentle wave, slow decay |
+| Skeleton | Skeleton, Bone, Mummy, Undead | Snappy bone clatter — high impulse, very fast decay |
+| Generic | Everything else | Standard physics |
 
 ### Known compatible mods
 
@@ -147,10 +173,14 @@ If your replacer uses a keyword not in the list, add an entry to `GenderOverride
 - Valley Girls ✔ (auto-detected)
 - XTardew Valley ✔ (auto-detected)
 - HornyFur ✔ (auto-detected)
-- Beast girl / slime girl / funtari slime monster mods ✔ (auto-detected)
+- Beast girl / slime girl / funtari slime / monster girl mods ✔ (auto-detected)
+- **Creatures and Cuties** ✔ (auto-detected keyword + generic monster archetype physics)
+- **Pokémon mods** ✔ (auto-detected keywords)
 - All vanilla NPC and farmer sprites ✔
+- All vanilla farm animals + mod-added animals in Coop/Barn ✔
+- Cats and dogs (pets) ✔ (included in NPC humanoid physics)
 - Modded NPCs and humanoids ✔ (falls back to game gender data)
-- Modded monsters (any creature marked IsMonster) ✔
+- Modded monsters (any creature marked IsMonster) ✔ (archetype auto-detected or Generic)
 
 ### No conflicts expected with
 
@@ -158,6 +188,7 @@ If your replacer uses a keyword not in the list, add an entry to `GenderOverride
 - Combat overhaul mods — physics is purely cosmetic, no gameplay stats changed
 - Any texture replacer — profile detection reads the active texture name at runtime
 - Wind mods — weather and season heuristics + internal wind field reflection
+- Farm animal mods — any animals in Farm/AnimalHouse locations are enumerated
 
 ---
 
@@ -173,6 +204,13 @@ For NPC-name-based rules:
 ```json
 { "CharacterName": "MyModNpc", "SpriteTextureContains": "", "ProfileType": "Feminine" }
 ```
+
+To add or change monster archetype detection, edit `assets/monsterArchetypes.json`:
+```json
+{ "NameContains": "MyCustomMonster", "Archetype": "Slime" }
+```
+
+Valid archetypes: `Generic`, `Slime`, `Bat`, `Worm`, `FlyingBug`, `Furry`, `Skeleton`.
 
 ---
 

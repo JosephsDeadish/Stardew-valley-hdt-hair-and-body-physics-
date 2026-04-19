@@ -20,6 +20,12 @@
   { "CharacterName": "",          "SpriteTextureContains": "monstergirl",  "ProfileType": "Feminine" },
   { "CharacterName": "",          "SpriteTextureContains": "monster_girl", "ProfileType": "Feminine" },
 
+  { "CharacterName": "",          "SpriteTextureContains": "creaturescuties",  "ProfileType": "Androgynous" },
+  { "CharacterName": "",          "SpriteTextureContains": "creatures_cuties", "ProfileType": "Androgynous" },
+  { "CharacterName": "",          "SpriteTextureContains": "creaturecute",     "ProfileType": "Androgynous" },
+  { "CharacterName": "",          "SpriteTextureContains": "pokemon",          "ProfileType": "Androgynous" },
+  { "CharacterName": "",          "SpriteTextureContains": "stardew_pokemon",  "ProfileType": "Androgynous" },
+
   { "CharacterName": "Emily",     "SpriteTextureContains": "", "ProfileType": "Feminine" },
   { "CharacterName": "Haley",     "SpriteTextureContains": "", "ProfileType": "Feminine" },
   { "CharacterName": "Leah",      "SpriteTextureContains": "", "ProfileType": "Feminine" },

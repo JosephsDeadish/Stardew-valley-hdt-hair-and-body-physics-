@@ -10,7 +10,9 @@ public sealed class ModConfig
     public bool EnableMonsterBodyPhysics { get; set; } = true;
     public bool EnableMonsterRagdoll { get; set; } = true;
     public bool EnableNpcSwordKnockdown { get; set; } = true;
+    public bool EnableFarmAnimalPhysics { get; set; } = true;
     public bool EnableEnvironmentalPhysics { get; set; } = true;
+    public bool EnableItemCollisionPhysics { get; set; } = true;
     public bool EnableWindDetection { get; set; } = true;
 
     // ── Feminine body strengths ───────────────────────────────────────────────
@@ -34,6 +36,12 @@ public sealed class ModConfig
     public float RagdollChanceUnderLowHealth { get; set; } = 0.5f;
     public float RagdollKnockbackStrength { get; set; } = 1.5f;
     public float NpcSwordKnockdownChance { get; set; } = 0.4f;
+
+    // ── Monster archetype physics ─────────────────────────────────────────────
+    public float MonsterArchetypeStrength { get; set; } = 0.55f;
+
+    // ── Farm animal physics ───────────────────────────────────────────────────
+    public float FarmAnimalPhysicsStrength { get; set; } = 0.45f;
 
     // ── Environmental physics ─────────────────────────────────────────────────
     public float EnvironmentalPhysicsStrength { get; set; } = 0.5f;

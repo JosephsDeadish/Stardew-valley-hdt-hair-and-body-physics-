@@ -11,6 +11,8 @@
     "MaleBellyStrength": 0.2,
     "HairStrength": 0.35,
     "RagdollKnockbackStrength": 1.0,
+    "MonsterArchetypeStrength": 0.35,
+    "FarmAnimalPhysicsStrength": 0.3,
     "EnvironmentalPhysicsStrength": 0.3
   },
   {
@@ -25,6 +27,8 @@
     "MaleBellyStrength": 0.25,
     "HairStrength": 0.55,
     "RagdollKnockbackStrength": 1.5,
+    "MonsterArchetypeStrength": 0.55,
+    "FarmAnimalPhysicsStrength": 0.45,
     "EnvironmentalPhysicsStrength": 0.5
   },
   {
@@ -39,6 +43,8 @@
     "MaleBellyStrength": 0.4,
     "HairStrength": 0.85,
     "RagdollKnockbackStrength": 2.5,
+    "MonsterArchetypeStrength": 0.9,
+    "FarmAnimalPhysicsStrength": 0.75,
     "EnvironmentalPhysicsStrength": 0.9
   }
 ]

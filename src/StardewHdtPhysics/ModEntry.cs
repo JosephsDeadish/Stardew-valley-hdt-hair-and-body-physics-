@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using StardewModdingAPI;
 using StardewModdingAPI.Events;
 using StardewValley;
+using StardewValley.Locations;
 using StardewValley.Tools;
 
 namespace StardewHdtPhysics;
@@ -15,7 +16,9 @@ public sealed class ModEntry : Mod
     private readonly Dictionary<int, Vector2> hairImpulse = new();
     private readonly Dictionary<int, Vector2> monsterBodyImpulse = new();
     private readonly Dictionary<int, NpcKnockdownState> npcKnockdown = new();
+    private readonly Dictionary<int, NpcKnockdownState> farmAnimalKnockdown = new();
     private readonly List<PhysicsPreset> presets = new();
+    private readonly List<MonsterArchetypeRule> monsterArchetypeRules = new();
 
     // ── Environmental physics state ───────────────────────────────────────────
     private Vector2 grassBendDisplacement = Vector2.Zero;
@@ -39,7 +42,6 @@ public sealed class ModEntry : Mod
         this.LoadData(helper);
         this.ApplyPresetIfMatched();
 
-        // Detect optional companion mods
         this.fashionSenseLoaded = helper.ModRegistry.IsLoaded("Flashshifter.FashionSense");
         if (this.fashionSenseLoaded)
         {
@@ -76,7 +78,6 @@ public sealed class ModEntry : Mod
             return;
         }
 
-        // Refresh wind every ~5 seconds (300 game ticks at 60fps)
         if (e.IsMultipleOf(300))
         {
             this.UpdateWindStrength();
@@ -84,7 +85,7 @@ public sealed class ModEntry : Mod
 
         var location = Game1.currentLocation;
 
-        // ── Humanoid characters (farmer + NPCs)
+        // ── Humanoid characters (farmer + NPCs + pets)
         foreach (var character in this.EnumerateHumanoids(location))
         {
             var key = this.GetCharacterKey(character);
@@ -106,7 +107,7 @@ public sealed class ModEntry : Mod
             this.lastPositions[key] = current;
         }
 
-        // ── Monsters
+        // ── Monsters (all archetypes — slime, bat, worm, bug, furry, skeleton, generic)
         if (this.config.EnableMonsterBodyPhysics || this.config.EnableMonsterRagdoll)
         {
             foreach (var monster in this.EnumerateMonsters(location))
@@ -123,6 +124,27 @@ public sealed class ModEntry : Mod
                 var profile = this.detector.Resolve(monster);
                 this.SimulateMonsterBody(monster, profile, velocity);
                 this.SimulateMonsterRagdoll(monster, velocity);
+
+                this.lastPositions[key] = current;
+            }
+        }
+
+        // ── Farm animals (chickens, cows, sheep, pigs, ducks, rabbits, etc.)
+        if (this.config.EnableFarmAnimalPhysics)
+        {
+            foreach (var animal in EnumerateFarmAnimals(location))
+            {
+                var key = this.GetCharacterKey(animal);
+                var current = animal.Position;
+                if (!this.lastPositions.TryGetValue(key, out var last))
+                {
+                    this.lastPositions[key] = current;
+                    continue;
+                }
+
+                var velocity = current - last;
+                this.SimulateFarmAnimalBody(animal, velocity);
+                this.TickFarmAnimalKnockdown(animal);
 
                 this.lastPositions[key] = current;
             }
@@ -147,7 +169,6 @@ public sealed class ModEntry : Mod
             return;
         }
 
-        // Cancel player body/hair impulse when using a tool
         var playerKey = this.GetCharacterKey(Game1.player);
         this.bodyImpulse[playerKey] = Vector2.Zero;
         this.hairImpulse[playerKey] = Vector2.Zero;
@@ -167,6 +188,21 @@ public sealed class ModEntry : Mod
                 this.TryApplyNpcSwordKnockdown(character);
             }
         }
+
+        // Farm animal sword/tool collision reaction
+        if (this.config.EnableFarmAnimalPhysics && Game1.currentLocation is not null)
+        {
+            foreach (var animal in EnumerateFarmAnimals(Game1.currentLocation))
+            {
+                this.TryApplyFarmAnimalCollision(animal);
+            }
+        }
+
+        // Tool swing disturbs grass based on tool weight/shape
+        if (this.config.EnableItemCollisionPhysics)
+        {
+            this.ApplyToolSwingToEnvironment(Game1.player.CurrentTool, Game1.player);
+        }
     }
 
     // ── State helpers ─────────────────────────────────────────────────────────
@@ -178,6 +214,7 @@ public sealed class ModEntry : Mod
         this.hairImpulse.Clear();
         this.monsterBodyImpulse.Clear();
         this.npcKnockdown.Clear();
+        this.farmAnimalKnockdown.Clear();
         this.grassBendDisplacement = Vector2.Zero;
         this.grassBendVelocity = Vector2.Zero;
     }
@@ -187,6 +224,10 @@ public sealed class ModEntry : Mod
         var profiles = helper.Data.ReadJsonFile<List<SpriteProfile>>("assets/spriteProfiles.json") ?? new List<SpriteProfile>();
         this.presets.Clear();
         this.presets.AddRange(helper.Data.ReadJsonFile<List<PhysicsPreset>>("assets/presets.json") ?? new List<PhysicsPreset>());
+        this.monsterArchetypeRules.Clear();
+        this.monsterArchetypeRules.AddRange(
+            helper.Data.ReadJsonFile<List<MonsterArchetypeRule>>("assets/monsterArchetypes.json")
+            ?? new List<MonsterArchetypeRule>());
         this.detector = new SpriteProfileDetector(profiles);
         this.detector.SetConfigOverrides(this.config.GenderOverrides);
     }
@@ -209,6 +250,8 @@ public sealed class ModEntry : Mod
         this.config.MaleBellyStrength = preset.MaleBellyStrength;
         this.config.HairStrength = preset.HairStrength;
         this.config.RagdollKnockbackStrength = preset.RagdollKnockbackStrength;
+        this.config.MonsterArchetypeStrength = preset.MonsterArchetypeStrength;
+        this.config.FarmAnimalPhysicsStrength = preset.FarmAnimalPhysicsStrength;
         this.config.EnvironmentalPhysicsStrength = preset.EnvironmentalPhysicsStrength;
     }
 
@@ -226,7 +269,6 @@ public sealed class ModEntry : Mod
 
         float wind = 0f;
 
-        // Try to read the game's internal wind float via reflection (safe; returns 0 on failure)
         try
         {
             var windField = typeof(Game1).GetField("wind",
@@ -243,14 +285,11 @@ public sealed class ModEntry : Mod
             // Reflection unavailable — fall through to weather heuristics
         }
 
-        // Rain — strengthens wind component
         this.currentRainStrength = Game1.isRaining ? (Game1.isLightning ? 0.85f : 0.5f) : 0f;
         if (Game1.isRaining) wind = Math.Max(wind, this.currentRainStrength * 0.8f);
 
-        // Snow — separate gentle flutter channel; doesn't add to "wind" reading
         this.currentSnowStrength = Game1.isSnowing ? 0.35f : 0f;
 
-        // Season modifiers when there's no strong weather
         if (wind < 0.1f)
         {
             if (Game1.IsFall) wind = 0.25f;
@@ -302,6 +341,28 @@ public sealed class ModEntry : Mod
         }
     }
 
+    /// <summary>
+    /// Enumerates farm animals from pasture (Farm) and animal housing (Coop/Barn/AnimalHouse).
+    /// Compatible with all vanilla and mod-added animals in those location types.
+    /// </summary>
+    private static IEnumerable<FarmAnimal> EnumerateFarmAnimals(GameLocation location)
+    {
+        if (location is Farm farm)
+        {
+            foreach (var animal in farm.animals.Values)
+            {
+                yield return animal;
+            }
+        }
+        else if (location is AnimalHouse house)
+        {
+            foreach (var animal in house.animals.Values)
+            {
+                yield return animal;
+            }
+        }
+    }
+
     // ── Body physics ──────────────────────────────────────────────────────────
 
     private void SimulateBody(Character character, BodyProfileType profile, Vector2 velocity)
@@ -330,18 +391,23 @@ public sealed class ModEntry : Mod
         this.bodyImpulse[key] = impulse;
     }
 
+    // ── Monster body physics ──────────────────────────────────────────────────
+
     /// <summary>
-    /// Body physics for monsters — only activates for those whose live sprite resolves as Feminine
-    /// (e.g. beast girls, slime girls, funtari slimes from sprite replacement mods).
+    /// Archetype-specific physics for ALL monsters:
+    ///   Slime   = bouncy jello (high impulse, slow decay 0.92, random wobble)
+    ///   Bat     = floppy wings (lateral flutter, snap-back 0.80)
+    ///   Worm    = squishy stretch (Y-axis dominant, 0.84 decay)
+    ///   FlyingBug = wing/thorax/leg vibration (rapid micro-oscillation, 0.78)
+    ///   Furry   = fur ripple (gentle wave, slow decay 0.90)
+    ///   Skeleton = bone clatter (high impulse, very fast decay 0.72)
+    ///   Generic = standard physics (0.86)
+    /// Female monster mods (beast girls, slime girls, etc.) get humanoid body overlay on top.
+    /// Supports all vanilla monsters and modded creatures/Creatures and Cuties/Pokemon mods.
     /// </summary>
     private void SimulateMonsterBody(NPC monster, BodyProfileType profile, Vector2 velocity)
     {
         if (!this.config.EnableMonsterBodyPhysics)
-        {
-            return;
-        }
-
-        if (profile != BodyProfileType.Feminine)
         {
             return;
         }
@@ -352,11 +418,190 @@ public sealed class ModEntry : Mod
             impulse = Vector2.Zero;
         }
 
-        var baseStrength = (this.config.FemaleBreastStrength + this.config.FemaleButtStrength + this.config.FemaleThighStrength + this.config.FemaleBellyStrength) / 4f;
-        impulse += new Vector2(-velocity.X, -velocity.Y) * (0.03f + (baseStrength * 0.04f));
-        impulse *= 0.86f;
+        var strength = this.config.MonsterArchetypeStrength;
+        var archetype = this.DetectMonsterArchetype(monster);
 
+        float decay;
+        switch (archetype)
+        {
+            case MonsterPhysicsArchetype.Slime:
+                // Bouncy jello: high impulse, very slow decay, random wobble in all directions
+                impulse += new Vector2(-velocity.X, -velocity.Y) * (0.06f * strength);
+                impulse += new Vector2(
+                    (Game1.random.NextSingle() - 0.5f) * 0.018f,
+                    (Game1.random.NextSingle() - 0.5f) * 0.018f) * strength;
+                decay = 0.92f;
+                break;
+
+            case MonsterPhysicsArchetype.Bat:
+                // Floppy wings: fast lateral flutter, quick snap-back
+                impulse += new Vector2(-velocity.X * 0.08f, velocity.Y * 0.025f) * strength;
+                impulse += new Vector2(
+                    (Game1.random.NextSingle() - 0.5f) * 0.012f, 0f) * strength;
+                decay = 0.80f;
+                break;
+
+            case MonsterPhysicsArchetype.Worm:
+                // Squishy stretch: Y-axis dominant (compression/extension like a worm)
+                impulse += new Vector2(-velocity.X * 0.025f, -velocity.Y * 0.07f) * strength;
+                decay = 0.84f;
+                break;
+
+            case MonsterPhysicsArchetype.FlyingBug:
+                // Wing/thorax/leg vibration: light rapid micro-oscillation
+                impulse += new Vector2(-velocity.X, -velocity.Y) * (0.04f * strength);
+                impulse += new Vector2(
+                    (Game1.random.NextSingle() - 0.5f) * 0.015f,
+                    (Game1.random.NextSingle() - 0.5f) * 0.01f) * strength;
+                decay = 0.78f;
+                break;
+
+            case MonsterPhysicsArchetype.Furry:
+                // Fur ripple: gentle surface wave, slow natural decay
+                impulse += new Vector2(-velocity.X, -velocity.Y) * (0.03f * strength);
+                decay = 0.90f;
+                break;
+
+            case MonsterPhysicsArchetype.Skeleton:
+                // Bone clatter: sharp snappy physics, very fast decay
+                impulse += new Vector2(-velocity.X, -velocity.Y) * (0.07f * strength);
+                decay = 0.72f;
+                break;
+
+            default: // Generic
+                impulse += new Vector2(-velocity.X, -velocity.Y) * (0.04f * strength);
+                decay = 0.86f;
+                break;
+        }
+
+        // Overlay feminine body physics for female monster sprite mods
+        if (profile == BodyProfileType.Feminine)
+        {
+            var femStrength = (this.config.FemaleBreastStrength + this.config.FemaleButtStrength
+                + this.config.FemaleThighStrength + this.config.FemaleBellyStrength) / 4f;
+            impulse += new Vector2(-velocity.X, -velocity.Y) * (0.03f + femStrength * 0.04f);
+        }
+
+        impulse *= decay;
         this.monsterBodyImpulse[key] = impulse;
+    }
+
+    private MonsterPhysicsArchetype DetectMonsterArchetype(NPC monster)
+    {
+        var name = monster.Name ?? string.Empty;
+        foreach (var rule in this.monsterArchetypeRules)
+        {
+            if (!string.IsNullOrEmpty(rule.NameContains)
+                && name.Contains(rule.NameContains, StringComparison.OrdinalIgnoreCase))
+            {
+                if (Enum.TryParse<MonsterPhysicsArchetype>(rule.Archetype, ignoreCase: true, out var parsed))
+                {
+                    return parsed;
+                }
+            }
+        }
+
+        return MonsterPhysicsArchetype.Generic;
+    }
+
+    // ── Farm animal physics ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// Body jiggle for farm animals. Heavy animals (cow, goat, sheep, pig, ostrich) get lower
+    /// impulse and slower decay. Light animals (chicken, duck, rabbit) are bouncier.
+    /// Compatible with all vanilla animals and any mod-added animals in Farm/AnimalHouse.
+    /// </summary>
+    private void SimulateFarmAnimalBody(FarmAnimal animal, Vector2 velocity)
+    {
+        if (velocity.LengthSquared() < 0.01f)
+        {
+            return;
+        }
+
+        var key = this.GetCharacterKey(animal);
+        if (!this.bodyImpulse.TryGetValue(key, out var impulse))
+        {
+            impulse = Vector2.Zero;
+        }
+
+        var typeName = animal.type.Value ?? string.Empty;
+        var strength = this.config.FarmAnimalPhysicsStrength;
+
+        var isHeavy = typeName.Contains("Cow", StringComparison.OrdinalIgnoreCase)
+            || typeName.Contains("Goat", StringComparison.OrdinalIgnoreCase)
+            || typeName.Contains("Sheep", StringComparison.OrdinalIgnoreCase)
+            || typeName.Contains("Pig", StringComparison.OrdinalIgnoreCase)
+            || typeName.Contains("Bull", StringComparison.OrdinalIgnoreCase)
+            || typeName.Contains("Ostrich", StringComparison.OrdinalIgnoreCase);
+
+        var impulseScale = isHeavy ? 0.04f : 0.07f;
+        var decay = isHeavy ? 0.88f : 0.83f;
+
+        impulse += new Vector2(-velocity.X, -velocity.Y) * (impulseScale * strength);
+        impulse *= decay;
+        this.bodyImpulse[key] = impulse;
+    }
+
+    /// <summary>
+    /// Cosmetic collision impulse on farm animals when player uses a tool/sword nearby.
+    /// No health loss, no upset animals — purely visual bounce/startle reaction.
+    /// </summary>
+    private void TryApplyFarmAnimalCollision(FarmAnimal animal)
+    {
+        if (Game1.player is null)
+        {
+            return;
+        }
+
+        var dist = Vector2.Distance(animal.Position, Game1.player.Position);
+        if (dist > 80f)
+        {
+            return;
+        }
+
+        if (Game1.random.NextDouble() > 0.65)
+        {
+            return;
+        }
+
+        var dir = animal.Position - Game1.player.Position;
+        if (dir.LengthSquared() < 0.001f)
+        {
+            dir = new Vector2(0f, 1f);
+        }
+        else
+        {
+            dir = Vector2.Normalize(dir);
+        }
+
+        var key = this.GetCharacterKey(animal);
+        this.farmAnimalKnockdown[key] = new NpcKnockdownState
+        {
+            Impulse = dir * (this.config.RagdollKnockbackStrength * 0.45f),
+            TicksRemaining = 10
+        };
+
+        var bodyEntry = this.bodyImpulse.TryGetValue(key, out var bi) ? bi : Vector2.Zero;
+        this.bodyImpulse[key] = bodyEntry + dir * 0.35f;
+    }
+
+    private void TickFarmAnimalKnockdown(FarmAnimal animal)
+    {
+        var key = this.GetCharacterKey(animal);
+        if (!this.farmAnimalKnockdown.TryGetValue(key, out var state))
+        {
+            return;
+        }
+
+        if (state.TicksRemaining <= 0)
+        {
+            this.farmAnimalKnockdown.Remove(key);
+            return;
+        }
+
+        animal.Position += state.Impulse;
+        state.Impulse *= 0.80f;
+        state.TicksRemaining--;
     }
 
     // ── Hair physics ──────────────────────────────────────────────────────────
@@ -379,18 +624,14 @@ public sealed class ModEntry : Mod
         var windMult = this.GetHairWindMultiplier();
         var isOutdoors = Game1.currentLocation?.IsOutdoors == true;
 
-        // ── Rain effect ───────────────────────────────────────────────────────
-        // Rain makes hair heavier — pulls downward and slightly dampens lateral flow.
+        // Rain: heavier hair — downward droop, dampened lateral flow
         if (this.currentRainStrength > 0f && isOutdoors)
         {
-            // Downward droop from wet weight
             impulse += new Vector2(0f, this.currentRainStrength * 0.012f) * this.config.HairStrength;
-            // Wet hair resists lateral movement
             windMult *= Math.Max(0.3f, 1f - this.currentRainStrength * 0.4f);
         }
 
-        // ── Snow effect ───────────────────────────────────────────────────────
-        // Snow adds a gentle random upward flutter (light snowflakes catch in hair).
+        // Snow: light upward flutter (snowflakes catching in hair)
         if (this.currentSnowStrength > 0f && isOutdoors)
         {
             var flutter = new Vector2(
@@ -399,13 +640,13 @@ public sealed class ModEntry : Mod
             impulse += flutter;
         }
 
-        // ── Ambient wind drift when standing still outdoors ───────────────────
+        // Ambient wind drift when standing still outdoors
         if (velocity.LengthSquared() < 0.0001f && isOutdoors)
         {
             impulse += new Vector2(this.currentWindStrength * 0.008f, 0f) * this.config.HairStrength;
         }
 
-        // ── Movement-based flow ───────────────────────────────────────────────
+        // Movement-based flow
         impulse += new Vector2(-velocity.X, -velocity.Y) * (0.02f * this.config.HairStrength * windMult);
         impulse *= 0.88f;
 
@@ -471,11 +712,18 @@ public sealed class ModEntry : Mod
         }
 
         farmer.Position += nudge;
+
+        // Ragdolling body crashes through grass — flatten it outward
+        if (this.config.EnableEnvironmentalPhysics && Game1.currentLocation?.IsOutdoors == true)
+        {
+            this.grassBendVelocity += nudge * 0.04f;
+        }
     }
 
     /// <summary>
-    /// Monster ragdoll: applies extra positional nudge when a monster is struck and moving fast.
-    /// Supports modded creatures automatically — any NPC marked IsMonster qualifies.
+    /// Monster ragdoll: extra positional nudge when struck and moving fast.
+    /// Supports all modded creatures — any NPC marked IsMonster qualifies.
+    /// Ragdolled monsters crashing through grass flatten and push it aside.
     /// </summary>
     private void SimulateMonsterRagdoll(NPC monster, Vector2 velocity)
     {
@@ -484,7 +732,6 @@ public sealed class ModEntry : Mod
             return;
         }
 
-        // Only activate when the monster is actively being knocked around
         if (velocity.LengthSquared() < 1f)
         {
             return;
@@ -502,6 +749,12 @@ public sealed class ModEntry : Mod
         }
 
         monster.Position += nudge;
+
+        // Monster ragdolling into grass flattens it
+        if (this.config.EnableEnvironmentalPhysics && Game1.currentLocation?.IsOutdoors == true)
+        {
+            this.grassBendVelocity += nudge * 0.035f;
+        }
     }
 
     // ── NPC sword knockdown ───────────────────────────────────────────────────
@@ -512,10 +765,6 @@ public sealed class ModEntry : Mod
         public int TicksRemaining;
     }
 
-    /// <summary>
-    /// Called when the player swings a melee weapon. Applies a cosmetic positional impulse
-    /// to nearby NPCs — no damage, no friendship penalty, purely visual physics reaction.
-    /// </summary>
     private void TryApplyNpcSwordKnockdown(Character character)
     {
         if (Game1.player is null)
@@ -524,7 +773,7 @@ public sealed class ModEntry : Mod
         }
 
         var dist = Vector2.Distance(character.Position, Game1.player.Position);
-        if (dist > 96f) // ~3 tiles
+        if (dist > 96f)
         {
             return;
         }
@@ -551,12 +800,10 @@ public sealed class ModEntry : Mod
             TicksRemaining = 12
         };
 
-        // Also feed the hit direction into body physics for jiggle reaction
         var bodyEntry = this.bodyImpulse.TryGetValue(key, out var bi) ? bi : Vector2.Zero;
         this.bodyImpulse[key] = bodyEntry + dir * 0.5f;
     }
 
-    /// <summary>Advances NPC knockdown state each tick, applying positional drift and friction.</summary>
     private void TickNpcKnockdown(Character character)
     {
         if (!this.config.EnableNpcSwordKnockdown || character is Farmer)
@@ -577,7 +824,7 @@ public sealed class ModEntry : Mod
         }
 
         character.Position += state.Impulse;
-        state.Impulse *= 0.82f; // friction decay
+        state.Impulse *= 0.82f;
         state.TicksRemaining--;
     }
 
@@ -585,9 +832,11 @@ public sealed class ModEntry : Mod
 
     /// <summary>
     /// Spring-force simulation for grass bend and environmental physics.
-    /// Grass near the player bends against their direction of travel.
-    /// Wind (when detected) causes a slow oscillating lateral drift.
-    /// Debris and rocks use the same impulse system to wobble/roll briefly on contact.
+    ///  - Grass bends against player's direction of travel (body collision)
+    ///  - Wind causes slow oscillating lateral drift
+    ///  - Ragdolled characters/monsters crash through and flatten grass (fed via grassBendVelocity)
+    ///  - Tool swings disturb grass based on tool weight/shape (ApplyToolSwingToEnvironment)
+    ///  - Rock rolls differently from sticks: pickaxe=heavy concentrated impact, scythe=wide sweep
     /// </summary>
     private void SimulateEnvironmental(GameLocation location)
     {
@@ -598,12 +847,10 @@ public sealed class ModEntry : Mod
 
         var strength = this.config.EnvironmentalPhysicsStrength;
 
-        // Wind drift contribution to grass bend
         var windDrift = this.config.EnableWindDetection && location.IsOutdoors
             ? new Vector2(this.currentWindStrength * 0.04f * strength, 0f)
             : Vector2.Zero;
 
-        // Player movement bends nearby grass away from direction of travel
         if (this.lastPositions.TryGetValue(this.GetCharacterKey(Game1.player), out var lastPos))
         {
             var playerVelocity = Game1.player.Position - lastPos;
@@ -613,23 +860,59 @@ public sealed class ModEntry : Mod
             }
         }
 
-        // Apply wind oscillation
         this.grassBendVelocity += windDrift;
-
-        // Spring restore force toward neutral
         this.grassBendVelocity -= this.grassBendDisplacement * (0.06f * strength);
-
-        // Air resistance / damping
         this.grassBendVelocity *= 0.85f;
-
-        // Integrate velocity into displacement
         this.grassBendDisplacement += this.grassBendVelocity;
 
-        // Safety clamp — prevent runaway displacement
         if (this.grassBendDisplacement.LengthSquared() > 9f)
         {
             this.grassBendDisplacement = Vector2.Normalize(this.grassBendDisplacement) * 3f;
         }
+    }
+
+    /// <summary>
+    /// Tool swings disturb the environment (grass, debris, rocks) based on tool weight and shape.
+    ///   Pickaxe = heavy concentrated smash (rocks fly short distance — heavy but round so some roll)
+    ///   Axe = heavy lateral chop (logs barely move — heavy and not round)
+    ///   MeleeWeapon = medium lateral knock (sticks tumble lightly)
+    ///   Hoe = light forward push
+    /// This models how rock vs stick collide differently: rock is heavier so less grass disturbance
+    /// per hit but rolls further once moving; stick causes more visible grass sweep as it tumbles.
+    /// </summary>
+    private void ApplyToolSwingToEnvironment(Tool? tool, Farmer player)
+    {
+        if (!this.config.EnableItemCollisionPhysics || !this.config.EnableEnvironmentalPhysics)
+        {
+            return;
+        }
+
+        if (tool is null || Game1.currentLocation is null)
+        {
+            return;
+        }
+
+        var strength = this.config.EnvironmentalPhysicsStrength;
+
+        var impulseScale = tool switch
+        {
+            Pickaxe     => 0.10f,
+            Axe         => 0.08f,
+            MeleeWeapon => 0.06f,
+            Hoe         => 0.04f,
+            _           => 0.03f
+        };
+
+        var swingDir = player.FacingDirection switch
+        {
+            0 => new Vector2(0f, -1f),
+            1 => new Vector2(1f, 0f),
+            2 => new Vector2(0f, 1f),
+            3 => new Vector2(-1f, 0f),
+            _ => Vector2.Zero
+        };
+
+        this.grassBendVelocity += swingDir * (impulseScale * strength);
     }
 
     // ── GMCM registration ─────────────────────────────────────────────────────
@@ -666,7 +949,7 @@ public sealed class ModEntry : Mod
         api.AddBoolOption(this.ModManifest,
             () => this.config.EnableHairPhysics, v => this.config.EnableHairPhysics = v,
             () => "Enable HDT hair physics",
-            () => "Bouncy/flowing hair motion that reacts to movement and wind.");
+            () => "Bouncy/flowing hair motion reacting to movement, wind, rain, and snow.");
         api.AddBoolOption(this.ModManifest,
             () => this.config.EnableIdleMotion, v => this.config.EnableIdleMotion = v,
             () => "Enable idle motion",
@@ -678,27 +961,35 @@ public sealed class ModEntry : Mod
         api.AddBoolOption(this.ModManifest,
             () => this.config.EnableMonsterBodyPhysics, v => this.config.EnableMonsterBodyPhysics = v,
             () => "Enable monster body physics",
-            () => "Body jiggle for monsters with feminine sprite mods (beast girls, slime girls, funtari slimes, etc.).");
+            () => "Per-archetype physics for ALL monsters: slime=jello, bat=floppy wings, worm=stretchy, bug=vibration, furry=fur, skeleton=bone clatter.");
         api.AddBoolOption(this.ModManifest,
             () => this.config.EnableMonsterRagdoll, v => this.config.EnableMonsterRagdoll = v,
             () => "Enable monster ragdoll",
-            () => "Ragdoll-style knockback impulse applied to monsters when they are hit. Supports modded creatures.");
+            () => "Ragdoll knockback for all monsters when struck. Supports all modded creatures.");
         api.AddBoolOption(this.ModManifest,
             () => this.config.EnableNpcSwordKnockdown, v => this.config.EnableNpcSwordKnockdown = v,
-            () => "Enable NPC sword knockdown",
-            () => "Sword swings near NPCs apply a harmless cosmetic knockback — no damage, no anger, pure physics.");
+            () => "Enable NPC/pet sword knockdown",
+            () => "Sword swings near NPCs and pets cause harmless cosmetic knockback. No damage, no anger.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableFarmAnimalPhysics, v => this.config.EnableFarmAnimalPhysics = v,
+            () => "Enable farm animal physics",
+            () => "Body jiggle and tool collision reactions for chickens, cows, sheep, pigs, ducks, rabbits, and all mod-added farm animals.");
         api.AddBoolOption(this.ModManifest,
             () => this.config.EnableEnvironmentalPhysics, v => this.config.EnableEnvironmentalPhysics = v,
             () => "Enable environmental physics",
-            () => "Grass bends when walked through, debris/rocks wobble when hit. Wind-aware outdoors.");
+            () => "Grass bends when walked through, flattened by ragdolled bodies, and disturbed by tool swings.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableItemCollisionPhysics, v => this.config.EnableItemCollisionPhysics = v,
+            () => "Enable item collision physics",
+            () => "Tool swings disturb grass/debris based on tool weight: heavy pickaxe=rock-roll impact, scythe=wide sweep, sword=lateral knock.");
         api.AddBoolOption(this.ModManifest,
             () => this.config.EnableWindDetection, v => { this.config.EnableWindDetection = v; this.UpdateWindStrength(); },
             () => "Enable wind detection",
-            () => "Reads game weather and season to boost hair and grass physics on windy days.");
+            () => "Boosts hair and grass physics on windy/rainy/snowy days. Reads game weather, season, and wind mods.");
 
         // ── Quick presets ─────────────────────────────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "Quick Presets");
-        api.AddParagraph(this.ModManifest, () => "Presets apply all physics strengths at once. Options: Soft, Default, High.");
+        api.AddParagraph(this.ModManifest, () => "Presets set all physics strengths at once. Options: Soft, Default, High.");
         api.AddTextOption(
             this.ModManifest,
             () => this.config.Preset,
@@ -711,79 +1002,110 @@ public sealed class ModEntry : Mod
         api.AddSectionTitle(this.ModManifest, () => "Feminine Physics Strength");
         api.AddNumberOption(this.ModManifest,
             () => this.config.FemaleBreastStrength, v => this.config.FemaleBreastStrength = v,
-            () => "Breast", () => "0 = off, 2 = maximum jiggle.", 0f, 2f, 0.05f);
+            () => "Breast", () => "0 = off, 2 = maximum.", 0f, 2f, 0.05f);
         api.AddNumberOption(this.ModManifest,
             () => this.config.FemaleButtStrength, v => this.config.FemaleButtStrength = v,
-            () => "Butt", () => "0 = off, 2 = maximum jiggle.", 0f, 2f, 0.05f);
+            () => "Butt", () => "0 = off, 2 = maximum.", 0f, 2f, 0.05f);
         api.AddNumberOption(this.ModManifest,
             () => this.config.FemaleThighStrength, v => this.config.FemaleThighStrength = v,
-            () => "Thigh", () => "0 = off, 2 = maximum jiggle.", 0f, 2f, 0.05f);
+            () => "Thigh", () => "0 = off, 2 = maximum.", 0f, 2f, 0.05f);
         api.AddNumberOption(this.ModManifest,
             () => this.config.FemaleBellyStrength, v => this.config.FemaleBellyStrength = v,
-            () => "Belly", () => "0 = off, 2 = maximum jiggle.", 0f, 2f, 0.05f);
+            () => "Belly", () => "0 = off, 2 = maximum.", 0f, 2f, 0.05f);
 
         // ── Masculine body strengths ──────────────────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "Masculine Physics Strength");
         api.AddNumberOption(this.ModManifest,
             () => this.config.MaleButtStrength, v => this.config.MaleButtStrength = v,
-            () => "Butt", () => "0 = off, 2 = maximum jiggle.", 0f, 2f, 0.05f);
+            () => "Butt", () => "0 = off, 2 = maximum.", 0f, 2f, 0.05f);
         api.AddNumberOption(this.ModManifest,
             () => this.config.MaleGroinStrength, v => this.config.MaleGroinStrength = v,
-            () => "Groin", () => "0 = off, 2 = maximum jiggle.", 0f, 2f, 0.05f);
+            () => "Groin", () => "0 = off, 2 = maximum.", 0f, 2f, 0.05f);
         api.AddNumberOption(this.ModManifest,
             () => this.config.MaleThighStrength, v => this.config.MaleThighStrength = v,
-            () => "Thigh", () => "0 = off, 2 = maximum jiggle.", 0f, 2f, 0.05f);
+            () => "Thigh", () => "0 = off, 2 = maximum.", 0f, 2f, 0.05f);
         api.AddNumberOption(this.ModManifest,
             () => this.config.MaleBellyStrength, v => this.config.MaleBellyStrength = v,
-            () => "Belly", () => "0 = off, 2 = maximum jiggle.", 0f, 2f, 0.05f);
+            () => "Belly", () => "0 = off, 2 = maximum.", 0f, 2f, 0.05f);
 
         // ── HDT Hair physics ──────────────────────────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "HDT Hair Physics");
         api.AddParagraph(this.ModManifest, () =>
-            "Hair physics apply to ALL hair types automatically: vanilla, mod-added, and Fashion Sense custom hairs. " +
-            "Rain makes hair heavier and droopy. Snow adds a light flutter. Wind causes flow and trailing. " +
+            "Hair physics apply to ALL hair types: vanilla, mod-added, and Fashion Sense custom hairs. " +
+            "Rain = heavy droopy hair. Snow = light flutter. Wind = flow and trail. " +
             (this.fashionSenseLoaded ? "Fashion Sense detected — FS hairs are included." : "Fashion Sense not detected (optional)."));
         api.AddNumberOption(this.ModManifest,
             () => this.config.HairStrength, v => this.config.HairStrength = v,
             () => "Hair strength",
-            () => "Overall flow and bounce strength. 0 = completely still, 2 = very bouncy.", 0f, 2f, 0.05f);
+            () => "Overall flow strength. 0 = still, 2 = very bouncy.", 0f, 2f, 0.05f);
         api.AddNumberOption(this.ModManifest,
             () => this.config.HairWindBoostOutdoors, v => this.config.HairWindBoostOutdoors = v,
             () => "Outdoor wind boost",
-            () => "Hair flow multiplier outdoors. Higher = longer trailing effect when running.", 0.1f, 2f, 0.05f);
+            () => "Multiplier outdoors. Higher = longer trailing effect when running.", 0.1f, 2f, 0.05f);
         api.AddNumberOption(this.ModManifest,
             () => this.config.HairDampeningIndoors, v => this.config.HairDampeningIndoors = v,
             () => "Indoor dampening",
-            () => "Hair flow multiplier indoors. Lower = calmer hair inside buildings.", 0f, 1f, 0.05f);
+            () => "Multiplier indoors. Lower = calmer hair inside buildings.", 0f, 1f, 0.05f);
 
         // ── Ragdoll & knockback ───────────────────────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "Ragdoll & Knockback");
         api.AddNumberOption(this.ModManifest,
             () => this.config.RagdollChanceUnderLowHealth, v => this.config.RagdollChanceUnderLowHealth = v,
             () => "Ragdoll chance at low health",
-            () => "Probability of ragdoll knockback triggering at ≤30 HP. 0 = never, 1 = always.", 0f, 1f, 0.05f);
+            () => "Probability of ragdoll knockback at ≤30 HP. 0 = never, 1 = always.", 0f, 1f, 0.05f);
         api.AddNumberOption(this.ModManifest,
             () => this.config.RagdollKnockbackStrength, v => this.config.RagdollKnockbackStrength = v,
             () => "Knockback strength",
-            () => "How far the ragdoll pushes the character. 1.5 = default, 4 = very strong.", 0.5f, 4f, 0.1f);
+            () => "How far ragdoll pushes characters. 1.5 = default, 4 = very strong.", 0.5f, 4f, 0.1f);
         api.AddNumberOption(this.ModManifest,
             () => this.config.NpcSwordKnockdownChance, v => this.config.NpcSwordKnockdownChance = v,
-            () => "NPC knockdown chance",
-            () => "Probability NPCs react to nearby sword swings. 0 = never, 1 = always. Cosmetic only.", 0f, 1f, 0.05f);
+            () => "NPC/pet knockdown chance",
+            () => "Probability NPCs and pets react to nearby sword swings. 0 = never, 1 = always. Cosmetic only.", 0f, 1f, 0.05f);
+
+        // ── Monster archetype physics ─────────────────────────────────────────
+        api.AddSectionTitle(this.ModManifest, () => "Monster Physics");
+        api.AddParagraph(this.ModManifest, () =>
+            "All monsters get archetype-specific physics automatically. " +
+            "Slime/Jelly = bouncy jello. Bat/Ghost = floppy wings. Serpent/Grub/Duggy = squishy stretch. " +
+            "Fly/Bug/Moth = wing+leg vibration. Wolf/Bear/Furry = fur ripple. Skeleton/Mummy = bone clatter. " +
+            "Female monster mods (beast girls, slime girls) additionally get humanoid body physics overlaid. " +
+            "Compatible with Creatures and Cuties, Pokemon mods, and all custom creature mods.");
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.MonsterArchetypeStrength, v => this.config.MonsterArchetypeStrength = v,
+            () => "Monster physics strength",
+            () => "Overall intensity for all monster archetype physics. 0 = off, 2 = maximum.", 0f, 2f, 0.05f);
+
+        // ── Farm animals & pets ───────────────────────────────────────────────
+        api.AddSectionTitle(this.ModManifest, () => "Farm Animals & Pets");
+        api.AddParagraph(this.ModManifest, () =>
+            "All farm animals get body jiggle: chickens, ducks, rabbits (bouncy), cows, goats, sheep, pigs, ostriches (heavy/slower). " +
+            "Mod-added animals in Coops and Barns are automatically included. " +
+            "Pets (cats and dogs) are always included in humanoid NPC physics. " +
+            "Sword and tool swings near animals cause a cosmetic startle reaction — no damage ever.");
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.FarmAnimalPhysicsStrength, v => this.config.FarmAnimalPhysicsStrength = v,
+            () => "Farm animal strength",
+            () => "Physics intensity for all farm animals. 0 = off, 2 = maximum.", 0f, 2f, 0.05f);
 
         // ── Environmental physics ─────────────────────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "Environmental Physics");
+        api.AddParagraph(this.ModManifest, () =>
+            "Grass bends as you walk through it and gets flattened when ragdolled bodies crash through it. " +
+            "Tool swings disturb environment based on weight and shape: " +
+            "pickaxe = heavy smash (rocks fly short but may roll being round), " +
+            "scythe = wide light sweep (sticks tumble), sword = lateral knock. " +
+            "Wind mods are automatically detected and boost grass physics outdoors.");
         api.AddNumberOption(this.ModManifest,
             () => this.config.EnvironmentalPhysicsStrength, v => this.config.EnvironmentalPhysicsStrength = v,
             () => "Environmental strength",
-            () => "Intensity of grass bend, debris roll, and rock wobble. 0 = off, 2 = maximum.", 0f, 2f, 0.05f);
+            () => "Intensity of grass bend, debris wobble, and rock roll physics. 0 = off, 2 = maximum.", 0f, 2f, 0.05f);
 
         // ── Gender overrides ──────────────────────────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "Gender Overrides");
         api.AddParagraph(this.ModManifest, () =>
             "Edit config.json to add manual gender overrides under \"GenderOverrides\". " +
             "Example: \"Krobus\": \"Feminine\". Values: Feminine, Masculine, Androgynous. " +
-            "Overrides take priority over all automatic detection including sprite texture names.");
+            "Overrides take priority over all automatic detection including live sprite texture names.");
     }
 
     // ── Utility ───────────────────────────────────────────────────────────────
