@@ -51,6 +51,13 @@ jobs:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       # ── 3. SteamCMD + Stardew Valley ─────────────────────────────────────────
+      - name: Cache Stardew Valley game files
+        id: cache-stardew
+        uses: actions/cache@v4
+        with:
+          path: ~/stardew
+          key: stardew-valley-linux-${{ runner.os }}-v1
+
       - name: Install SteamCMD
         run: |
           for attempt in 1 2 3; do
@@ -70,6 +77,7 @@ jobs:
           done
 
       - name: Download Stardew Valley via SteamCMD
+        if: steps.cache-stardew.outputs.cache-hit != 'true'
         env:
           STEAM_USER: ${{ secrets.STEAM_USERNAME }}
           STEAM_PASS: ${{ secrets.STEAM_PASSWORD }}
@@ -116,14 +124,15 @@ jobs:
             exit 1
           fi
 
-          echo "STARDEW_PATH=$STARDEW_DIR" >> "$GITHUB_ENV"
-
-          # Verify the game DLL is present
-          if [ ! -f "$STARDEW_DIR/Stardew Valley.dll" ]; then
-            echo "ERROR: Stardew Valley.dll not found in $STARDEW_DIR"
-            ls -lah "$STARDEW_DIR"
+      - name: Set STARDEW_PATH
+        run: |
+          echo "STARDEW_PATH=$HOME/stardew" >> "$GITHUB_ENV"
+          if [ ! -f "$HOME/stardew/Stardew Valley.dll" ]; then
+            echo "ERROR: Stardew Valley.dll not found in $HOME/stardew"
+            ls -lah "$HOME/stardew" || true
             exit 1
           fi
+          echo "Stardew Valley.dll found (cache-hit=${{ steps.cache-stardew.outputs.cache-hit }})."
 
       # ── 4. SMAPI ─────────────────────────────────────────────────────────────
       - name: Install SMAPI into game folder
