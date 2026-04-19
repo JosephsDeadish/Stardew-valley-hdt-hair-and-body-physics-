@@ -36,6 +36,20 @@ public sealed class ModConfig
     public bool EnableCropWeedCollisionPhysics { get; set; } = true;
     /// <summary>All NPCs, monsters, and farm animals contribute to dynamic grass bending (not just the player).</summary>
     public bool EnableAllCreatureGrassCollision { get; set; } = true;
+    /// <summary>
+    /// Separate physics layer for clothing on top of body physics.
+    /// Flowy clothing (dresses, robes, capes, skirts) trails and billows behind movement and is pushed by wind/rain.
+    /// Tight clothing (shorts, tights, bikini, fitted) closely tracks the body with minimal extra sway.
+    /// No body-physics clipping: clothing offset is added on top and blended at reduced scale.
+    /// Works with all vanilla and modded clothing.
+    /// </summary>
+    public bool EnableClothingFlowPhysics { get; set; } = true;
+    /// <summary>Brief body + hair impulse when the farmer steps through a door or warp point.</summary>
+    public bool EnableWarpStepImpulse { get; set; } = true;
+    /// <summary>Body bounce when the farmer starts eating or drinking.</summary>
+    public bool EnableEatingBounce { get; set; } = true;
+    /// <summary>Brief body/hair flinch when lightning strikes outdoors.</summary>
+    public bool EnableLightningFlinch { get; set; } = true;
 
     // ── Feminine body strengths ───────────────────────────────────────────────
     public float FemaleBreastStrength { get; set; } = 0.75f;
@@ -89,12 +103,26 @@ public sealed class ModConfig
     /// <summary>How strongly grass, crops, and weeds bend and part when walked through or ragdolled into.</summary>
     public float CropWeedCollisionStrength { get; set; } = 0.65f;
 
+    // ── Clothing flow physics ─────────────────────────────────────────────────
+    /// <summary>
+    /// Overall strength of the clothing flow physics layer.
+    /// Flowy clothing (dresses, capes) swings wider and trails longer.
+    /// Tight clothing (shorts, tights) has a tighter, quicker follow.
+    /// 0 = no extra clothing sway, 1 = default, 2 = very dramatic cloth movement.
+    /// </summary>
+    public float ClothingFlowStrength { get; set; } = 1.0f;
+
     // ── Idle motion ───────────────────────────────────────────────────────────
     /// <summary>
     /// Ticks between idle physics bursts (body sways, leans, stretches). Default 90 = ~1.5 seconds.
     /// Lower values = physics visible more often. Minimum recommended: 30.
     /// </summary>
     public int IdleMotionIntervalTicks { get; set; } = 90;
+    /// <summary>
+    /// Overall strength multiplier for idle motion impulses.
+    /// 0.5 = subtle, 1.0 = default, 2.0 = very expressive idle movements.
+    /// </summary>
+    public float IdleMotionStrength { get; set; } = 1.0f;
 
     // ── Presets ───────────────────────────────────────────────────────────────
     public string Preset { get; set; } = "Default";

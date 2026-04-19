@@ -15,6 +15,7 @@ public sealed class ModEntry : Mod
     private readonly Dictionary<int, Vector2> lastPositions = new();
     private readonly Dictionary<int, Vector2> bodyImpulse = new();
     private readonly Dictionary<int, Vector2> hairImpulse = new();
+    private readonly Dictionary<int, Vector2> clothingImpulse = new();
     private readonly Dictionary<int, Vector2> monsterBodyImpulse = new();
     private readonly Dictionary<int, NpcKnockdownState> npcKnockdown = new();
     private readonly Dictionary<int, NpcKnockdownState> farmAnimalKnockdown = new();
@@ -40,6 +41,8 @@ public sealed class ModEntry : Mod
     private int lastPlayerHealth = -1;
     private bool wasSwimming = false;
     private int waterEmergenceTicksRemaining = 0;
+    private bool wasEating = false;
+    private bool wasLightning = false;
 
     // ── Skill level tracking (for level-up bounce) ────────────────────────────
     private int lastSkillLevelSum = -1;
@@ -102,6 +105,7 @@ public sealed class ModEntry : Mod
         helper.Events.Input.ButtonPressed += this.OnButtonPressed;
         helper.Events.Display.RenderingWorld += this.OnRenderingWorld;
         helper.Events.Display.RenderedWorld += this.OnRenderedWorld;
+        helper.Events.Player.Warped += this.OnPlayerWarped;
     }
 
     // ── Event handlers ────────────────────────────────────────────────────────
@@ -124,7 +128,34 @@ public sealed class ModEntry : Mod
 
     private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
     {
-        this.Monitor.Log("SVP Collisions, Physics, and Hit Stops — successfully initialized.", LogLevel.Info);
+        this.Monitor.Log("╔══════════════════════════════════════════════════════╗", LogLevel.Info);
+        this.Monitor.Log("║  SVP Collisions, Physics, and Hit Stops — v0.2.0     ║", LogLevel.Info);
+        this.Monitor.Log("║  Successfully initialized.                           ║", LogLevel.Info);
+        this.Monitor.Log("╠══════════════════════════════════════════════════════╣", LogLevel.Info);
+        this.Monitor.Log($"║  Body physics:           {(this.config.EnableBodyPhysics ? "ON " : "OFF")}", LogLevel.Info);
+        this.Monitor.Log($"║  Hair physics (HDT):     {(this.config.EnableHairPhysics ? "ON " : "OFF")}", LogLevel.Info);
+        this.Monitor.Log($"║  Clothing flow physics:  {(this.config.EnableClothingFlowPhysics ? "ON " : "OFF")}", LogLevel.Info);
+        this.Monitor.Log($"║  Idle motion:            {(this.config.EnableIdleMotion ? "ON " : "OFF")} (interval: {this.config.IdleMotionIntervalTicks} ticks)", LogLevel.Info);
+        this.Monitor.Log($"║  Hitstop + hit flash:    {(this.config.EnableHitstopEffect ? "ON " : "OFF")}", LogLevel.Info);
+        this.Monitor.Log($"║  Ragdoll knockback:      {(this.config.EnableRagdollKnockback ? "ON " : "OFF")}", LogLevel.Info);
+        this.Monitor.Log($"║  Monster physics:        {(this.config.EnableMonsterBodyPhysics ? "ON " : "OFF")}", LogLevel.Info);
+        this.Monitor.Log($"║  Monster ragdoll:        {(this.config.EnableMonsterRagdoll ? "ON " : "OFF")}", LogLevel.Info);
+        this.Monitor.Log($"║  Farm animal physics:    {(this.config.EnableFarmAnimalPhysics ? "ON " : "OFF")}", LogLevel.Info);
+        this.Monitor.Log($"║  Environmental physics:  {(this.config.EnableEnvironmentalPhysics ? "ON " : "OFF")}", LogLevel.Info);
+        this.Monitor.Log($"║  Debris physics:         {(this.config.EnableDebrisPhysics ? "ON " : "OFF")}", LogLevel.Info);
+        this.Monitor.Log($"║  Dragon physics:         {(this.config.EnableDragonPhysics ? "ON " : "OFF")}", LogLevel.Info);
+        this.Monitor.Log($"║  Magic cast physics:     {(this.config.EnableMagicCastPhysics ? "ON " : "OFF")}", LogLevel.Info);
+        this.Monitor.Log($"║  Wind detection:         {(this.config.EnableWindDetection ? "ON " : "OFF")}", LogLevel.Info);
+        this.Monitor.Log($"║  Warp-step impulse:      {(this.config.EnableWarpStepImpulse ? "ON " : "OFF")}", LogLevel.Info);
+        this.Monitor.Log($"║  Eating bounce:          {(this.config.EnableEatingBounce ? "ON " : "OFF")}", LogLevel.Info);
+        this.Monitor.Log($"║  Lightning flinch:       {(this.config.EnableLightningFlinch ? "ON " : "OFF")}", LogLevel.Info);
+        this.Monitor.Log("╠══════════════════════════════════════════════════════╣", LogLevel.Info);
+        this.Monitor.Log($"║  Fashion Sense:   {(this.fashionSenseLoaded ? "✓ detected" : "not detected (optional)")}", LogLevel.Info);
+        this.Monitor.Log($"║  Druid mod:       {(this.druidModLoaded ? "✓ detected (dragon physics active)" : "not detected (optional)")}", LogLevel.Info);
+        this.Monitor.Log($"║  Magic/SpaceCore: {(this.magicModLoaded ? "✓ detected (spell physics active)" : "not detected (optional)")}", LogLevel.Info);
+        this.Monitor.Log($"║  Preset loaded:   {this.config.Preset}", LogLevel.Info);
+        this.Monitor.Log("╚══════════════════════════════════════════════════════╝", LogLevel.Info);
+
         // Re-register GMCM now that all mods have loaded so the page picks up the correct name.
         this.RegisterConfigMenu();
     }
@@ -157,10 +188,19 @@ public sealed class ModEntry : Mod
                 continue;
             }
 
+            // Blend body impulse + clothing flow impulse for final visual offset.
+            // Clothing adds a trailing/flowing layer on top of the body wobble.
+            // The clothing contribution is capped separately so flowy clothing can
+            // flow a bit beyond the body without exceeding the overall pixel cap.
+            var clothingImp = (this.config.EnableClothingFlowPhysics && this.clothingImpulse.TryGetValue(key, out var ci))
+                ? ci * 0.42f   // clothing adds up to ~42% extra visual displacement on top of body
+                : Vector2.Zero;
+            var blendedImpulse = impulse + clothingImp;
+
             // Scale up to screen-pixel range, then clamp
             var visualOffset = new Vector2(
-                Math.Clamp(impulse.X * PhysicsVisualScale, -PhysicsVisualMaxPx, PhysicsVisualMaxPx),
-                Math.Clamp(impulse.Y * PhysicsVisualScale, -PhysicsVisualMaxPx, PhysicsVisualMaxPx));
+                Math.Clamp(blendedImpulse.X * PhysicsVisualScale, -PhysicsVisualMaxPx, PhysicsVisualMaxPx),
+                Math.Clamp(blendedImpulse.Y * PhysicsVisualScale, -PhysicsVisualMaxPx, PhysicsVisualMaxPx));
 
             this.savedPhysicsPositions[character] = character.Position;
             character.Position += visualOffset;
@@ -184,6 +224,48 @@ public sealed class ModEntry : Mod
         }
 
         this.savedPhysicsPositions.Clear();
+    }
+
+    /// <summary>
+    /// When the farmer steps through a door, warp point, or teleport, apply a brief body bounce
+    /// and hair toss to simulate the physical momentum of passing through a threshold.
+    /// Also resets the clothing impulse so flowy fabrics "settle" after the transition.
+    /// </summary>
+    private void OnPlayerWarped(object? sender, WarpedEventArgs e)
+    {
+        if (!Context.IsWorldReady || !this.config.EnableWarpStepImpulse || Game1.player is null)
+        {
+            return;
+        }
+
+        var playerKey = this.GetCharacterKey(Game1.player);
+
+        // Brief upward-then-forward bounce as the farmer steps through
+        var warpImpulse = new Vector2(
+            (Game1.random.NextSingle() - 0.5f) * 0.22f,
+            -0.35f); // slight upward pop as they cross the threshold
+
+        if (this.config.EnableBodyPhysics)
+        {
+            var existing = this.bodyImpulse.TryGetValue(playerKey, out var bi) ? bi : Vector2.Zero;
+            this.bodyImpulse[playerKey] = existing + warpImpulse;
+        }
+
+        if (this.config.EnableHairPhysics)
+        {
+            var hairExisting = this.hairImpulse.TryGetValue(playerKey, out var hi) ? hi : Vector2.Zero;
+            // Hair tosses upward and slightly backward on entry
+            this.hairImpulse[playerKey] = hairExisting + new Vector2(warpImpulse.X * 0.8f, warpImpulse.Y * 1.4f) * this.config.HairStrength;
+        }
+
+        // Settle clothing physics — flowy items need a small resettling impulse after transition
+        if (this.config.EnableClothingFlowPhysics)
+        {
+            var ci = this.clothingImpulse.TryGetValue(playerKey, out var cExist) ? cExist : Vector2.Zero;
+            this.clothingImpulse[playerKey] = ci * 0.4f + warpImpulse * 0.5f * this.config.ClothingFlowStrength;
+        }
+
+        this.Monitor.Log($"[SVP] Warp to '{e.NewLocation?.Name ?? "unknown"}' — door-step physics impulse applied.", LogLevel.Trace);
     }
 
     private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
@@ -226,6 +308,30 @@ public sealed class ModEntry : Mod
         if (this.waterEmergenceTicksRemaining > 0)
         {
             this.waterEmergenceTicksRemaining--;
+        }
+
+        // Eating/drinking bounce: when the farmer starts eating, apply a chin-dip body impulse
+        if (this.config.EnableEatingBounce && this.config.EnableBodyPhysics && Game1.player is not null)
+        {
+            var isEating = Game1.player.isEating;
+            if (isEating && !this.wasEating)
+            {
+                this.ApplyEatingBounce(Game1.player);
+            }
+
+            this.wasEating = isEating;
+        }
+
+        // Lightning flinch: brief body/hair flinch when lightning strikes
+        if (this.config.EnableLightningFlinch && this.config.EnableBodyPhysics && Game1.player is not null)
+        {
+            var isLightning = Game1.isLightning;
+            if (isLightning && !this.wasLightning)
+            {
+                this.ApplyLightningFlinch(Game1.player);
+            }
+
+            this.wasLightning = isLightning;
         }
 
         // Skill level-up bounce: check if any skill level increased since last tick
@@ -284,6 +390,7 @@ public sealed class ModEntry : Mod
             this.SimulateBody(character, profile, velocity);
             this.SimulateHair(character, velocity);
             this.SimulateIdle(character, velocity);
+            this.SimulateClothing(character, velocity, profile);
             this.TryApplyLowHealthRagdoll(character, velocity);
             this.TickNpcKnockdown(character);
 
@@ -464,6 +571,7 @@ public sealed class ModEntry : Mod
         this.lastPositions.Clear();
         this.bodyImpulse.Clear();
         this.hairImpulse.Clear();
+        this.clothingImpulse.Clear();
         this.monsterBodyImpulse.Clear();
         this.npcKnockdown.Clear();
         this.farmAnimalKnockdown.Clear();
@@ -473,6 +581,8 @@ public sealed class ModEntry : Mod
         this.lastPlayerHealth = -1;
         this.wasSwimming = false;
         this.waterEmergenceTicksRemaining = 0;
+        this.wasEating = false;
+        this.wasLightning = false;
         this.lastSkillLevelSum = -1;
         this.levelUpBounceTicksRemaining = 0;
         this.dragonRagdollCooldown.Clear();
@@ -1103,6 +1213,266 @@ public sealed class ModEntry : Mod
         Game1.createItemDebris(dropped, farmer.Position + offset, farmer.FacingDirection, Game1.currentLocation);
     }
 
+    // ── Clothing flow physics ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Classifies whether a farmer's clothing is flowy/loose, tight/form-fitting, or default.
+    /// Detection uses keyword matching on worn item names, compatible with all vanilla and
+    /// modded clothing items. Flowy items trail and billow; tight items track the body closely.
+    /// </summary>
+    private enum ClothingFlowType { Default, Flowy, Tight }
+
+    private ClothingFlowType GetClothingFlowType(Character character)
+    {
+        if (character is not Farmer farmer)
+        {
+            return ClothingFlowType.Default;
+        }
+
+        var shirt = farmer.shirtItem.Value?.Name ?? string.Empty;
+        var pants = farmer.pantsItem.Value?.Name ?? string.Empty;
+        var hat   = farmer.hat.Value?.Name       ?? string.Empty;
+
+        var combined = shirt + " " + pants + " " + hat;
+
+        // Flowy: dresses, robes, capes, cloaks, skirts, gowns, tunics, silk, satin, etc.
+        if (ContainsAny(combined,
+            "dress", "robe", "cape", "cloak", "skirt", "gown", "tunic", "flowing",
+            "loose", "silk", "satin", "chiffon", "lace", "veil", "mantle", "wrap",
+            "sarong", "kimono", "shawl", "poncho", "wizard", "witch", "mage", "druid",
+            "noble", "scholar", "maid", "apron", "overcoat", "trench", "flowy"))
+        {
+            return ClothingFlowType.Flowy;
+        }
+
+        // Tight: shorts, tights, form-fitting, athletic, bikini, crop, etc.
+        if (ContainsAny(combined,
+            "tight", "tights", "shorts", "bikini", "crop", "sport", "athletic", "fitted",
+            "leotard", "bodysuit", "spandex", "tank", "jeans", "denim", "leather",
+            "armor", "chainmail", "swimsuit", "wetsuit", "compression"))
+        {
+            return ClothingFlowType.Tight;
+        }
+
+        return ClothingFlowType.Default;
+    }
+
+    /// <summary>
+    /// Simulates a separate clothing physics layer on top of body physics.
+    ///
+    /// Behavior by clothing type:
+    ///   Flowy (dress/robe/cape/skirt): large trailing lag, wind billowing, rain-heavy droop,
+    ///     swims buoyant, longer settle time. Visually: fabric trails and swings wide.
+    ///   Tight (shorts/tights/bikini): nearly tracks body, minimal extra sway, less wind effect.
+    ///   Default: moderate lag and amplitude.
+    ///
+    /// The clothing impulse is blended into the visual offset at ~42% scale on top of the body
+    /// impulse so clothing movement is visible but does not overpower or clip through body physics.
+    /// All parameters scale with ClothingFlowStrength from config.
+    /// Compatible with all vanilla and modded clothing — detection is name-keyword-based.
+    /// </summary>
+    private void SimulateClothing(Character character, Vector2 velocity, BodyProfileType profile)
+    {
+        if (!this.config.EnableClothingFlowPhysics || !this.config.EnableBodyPhysics)
+        {
+            return;
+        }
+
+        var key = this.GetCharacterKey(character);
+        if (!this.clothingImpulse.TryGetValue(key, out var cImpulse))
+        {
+            cImpulse = Vector2.Zero;
+        }
+
+        var flowType   = this.GetClothingFlowType(character);
+        var str        = this.config.ClothingFlowStrength;
+        var bodyImp    = this.bodyImpulse.TryGetValue(key, out var bi) ? bi : Vector2.Zero;
+        var isOutdoors = Game1.currentLocation?.IsOutdoors == true;
+
+        // Per-type parameters: lag (0=slow to catch up, 1=instant), amplitude (fabric swing range)
+        float lagFactor, flowAmp, decayFactor;
+        switch (flowType)
+        {
+            case ClothingFlowType.Flowy:
+                lagFactor   = 0.10f;  // clothing slowly drifts to match body impulse (heavy trail)
+                flowAmp     = 1.45f;  // fabric swings wider than body
+                decayFactor = 0.90f;  // slow settle = lingering billow
+                break;
+            case ClothingFlowType.Tight:
+                lagFactor   = 0.50f;  // nearly instant tracking
+                flowAmp     = 0.65f;  // barely moves beyond body
+                decayFactor = 0.80f;  // fast settle
+                break;
+            default:
+                lagFactor   = 0.25f;
+                flowAmp     = 1.00f;
+                decayFactor = 0.85f;
+                break;
+        }
+
+        // Movement-driven trail: clothing resists direction change and trails behind
+        cImpulse += new Vector2(-velocity.X, -velocity.Y) * (0.022f * str * flowAmp);
+
+        // Clothing drifts toward body impulse with per-type lag (soft follow)
+        cImpulse += (bodyImp * flowAmp - cImpulse) * (lagFactor * str);
+
+        // Wind: flowy fabrics billow in the breeze outdoors
+        if (this.config.EnableWindDetection && isOutdoors && this.currentWindStrength > 0f)
+        {
+            var windFactor = flowType == ClothingFlowType.Flowy ? 2.0f : 0.55f;
+            cImpulse += new Vector2(this.currentWindStrength * 0.012f * windFactor * str, 0f);
+
+            // Extra flutter for flowy clothing: small oscillation from wind catching fabric
+            if (flowType == ClothingFlowType.Flowy)
+            {
+                var phase = key % 100 * 0.071f;
+                cImpulse += new Vector2(
+                    (float)Math.Sin(Game1.ticks * 0.11f + phase) * 0.006f * str * this.currentWindStrength,
+                    (float)Math.Cos(Game1.ticks * 0.07f + phase) * 0.003f * str * this.currentWindStrength);
+            }
+        }
+
+        // Rain: wet clothing becomes heavy and droops — the heavier the fabric, the more it droops
+        if (this.currentRainStrength > 0f && isOutdoors)
+        {
+            var rainDroop = flowType switch
+            {
+                ClothingFlowType.Flowy  => this.currentRainStrength * 0.018f,  // soaked heavy droop
+                ClothingFlowType.Tight  => this.currentRainStrength * 0.005f,  // barely affected
+                _                       => this.currentRainStrength * 0.010f
+            };
+            cImpulse += new Vector2(0f, rainDroop * str);       // downward wet droop
+            cImpulse.X *= (1f - this.currentRainStrength * 0.15f); // rain dampens lateral swing
+        }
+
+        // Swimming: clothing fans out and floats in water (buoyant uplift with gentle spread)
+        if (character is Farmer swimmingFarmer && swimmingFarmer.swimming.Value)
+        {
+            cImpulse += new Vector2(
+                (Game1.random.NextSingle() - 0.5f) * 0.014f,
+                -(Game1.random.NextSingle() * 0.009f)) * flowAmp * str;
+            cImpulse *= 0.88f; // water dampens oscillations
+            this.clothingImpulse[key] = cImpulse;
+            return;
+        }
+
+        // Speed amplification: running fast = more dramatic clothing trail
+        var speed = velocity.Length();
+        if (speed > 3.5f)
+        {
+            cImpulse += new Vector2(-velocity.X, -velocity.Y) * (0.010f * str * flowAmp * Math.Min(speed * 0.2f, 1.5f));
+        }
+
+        // Micro-flicker: tiny baseline activity so flowy clothing is never perfectly still
+        if (flowType == ClothingFlowType.Flowy)
+        {
+            cImpulse += new Vector2(
+                (Game1.random.NextSingle() - 0.5f) * 0.004f * str,
+                (Game1.random.NextSingle() - 0.5f) * 0.002f * str);
+        }
+
+        cImpulse *= decayFactor;
+        this.clothingImpulse[key] = cImpulse;
+    }
+
+    /// <summary>
+    /// Applies a brief "chin-dip" body bounce when the farmer begins eating or drinking.
+    /// Models the slight forward lean and chewing motion typical of eating animations.
+    /// Hair swings forward with the head movement then settles back.
+    /// </summary>
+    private void ApplyEatingBounce(Farmer farmer)
+    {
+        if (!this.config.EnableBodyPhysics)
+        {
+            return;
+        }
+
+        var key = this.GetCharacterKey(farmer);
+        var profile = this.detector.Resolve(farmer);
+        var baseStrength = profile switch
+        {
+            BodyProfileType.Feminine => (this.config.FemaleBreastStrength + this.config.FemaleBellyStrength) / 2f,
+            BodyProfileType.Masculine => (this.config.MaleBellyStrength + this.config.MaleGroinStrength) / 2f,
+            _ => 0.35f
+        };
+
+        // Forward lean: slight tilt in the facing direction + downward head bob
+        var leanDir = farmer.FacingDirection switch
+        {
+            0 => new Vector2(0f, -0.5f),
+            1 => new Vector2(0.5f, 0f),
+            2 => new Vector2(0f, 0.5f),
+            3 => new Vector2(-0.5f, 0f),
+            _ => new Vector2(0f, 0.3f)
+        };
+
+        var eatImpulse = leanDir * (0.28f * baseStrength) + new Vector2(0f, 0.12f);
+        var existing = this.bodyImpulse.TryGetValue(key, out var bi) ? bi : Vector2.Zero;
+        this.bodyImpulse[key] = existing + eatImpulse;
+
+        if (this.config.EnableHairPhysics)
+        {
+            var hi = this.hairImpulse.TryGetValue(key, out var hExist) ? hExist : Vector2.Zero;
+            this.hairImpulse[key] = hi + leanDir * (this.config.HairStrength * 0.5f);
+        }
+
+        this.Monitor.Log("[SVP] Eating started — chin-dip body impulse applied.", LogLevel.Trace);
+    }
+
+    /// <summary>
+    /// Applies a full-body flinch when lightning strikes (Game1.isLightning transitions true).
+    /// Models the instinctive startle/cringe reaction to a nearby lightning strike:
+    /// sharp random directional impulse, dramatic hair whip, brief hitstop-style freeze.
+    /// Works for the farmer and is strong enough to be visible even indoors (through walls).
+    /// </summary>
+    private void ApplyLightningFlinch(Farmer farmer)
+    {
+        if (!this.config.EnableBodyPhysics)
+        {
+            return;
+        }
+
+        var key     = this.GetCharacterKey(farmer);
+        var profile = this.detector.Resolve(farmer);
+        var baseStr = profile switch
+        {
+            BodyProfileType.Feminine => (this.config.FemaleBreastStrength + this.config.FemaleButtStrength) / 2f,
+            BodyProfileType.Masculine => (this.config.MaleButtStrength + this.config.MaleGroinStrength) / 2f,
+            _ => 0.4f
+        };
+
+        // Random sharp spike in any direction — startled = no clear direction
+        var flinchAngle = (float)(Game1.random.NextDouble() * Math.PI * 2.0);
+        var flinchDir   = new Vector2((float)Math.Cos(flinchAngle), (float)Math.Sin(flinchAngle));
+        var flinchImpulse = flinchDir * (0.7f * baseStr);
+
+        var existing = this.bodyImpulse.TryGetValue(key, out var bi) ? bi : Vector2.Zero;
+        this.bodyImpulse[key] = existing + flinchImpulse;
+
+        if (this.config.EnableHairPhysics)
+        {
+            var hi = this.hairImpulse.TryGetValue(key, out var hExist) ? hExist : Vector2.Zero;
+            // Hair whips in the flinch direction — electric static makes it stand up a little
+            this.hairImpulse[key] = hi + flinchDir * (this.config.HairStrength * 1.6f);
+        }
+
+        // Clothing billows outward from the electric shock
+        if (this.config.EnableClothingFlowPhysics)
+        {
+            var ci = this.clothingImpulse.TryGetValue(key, out var cExist) ? cExist : Vector2.Zero;
+            this.clothingImpulse[key] = ci + flinchImpulse * (this.config.ClothingFlowStrength * 1.2f);
+        }
+
+        // Brief hitstop for the startle reaction
+        if (this.config.EnableHitstopEffect)
+        {
+            this.hitstopTicksRemaining = Math.Max(this.hitstopTicksRemaining, 2);
+            Game1.flashAlpha = 0.45f; // white flash like actual lightning
+        }
+
+        this.Monitor.Log("[SVP] Lightning strike — full-body flinch impulse applied.", LogLevel.Trace);
+    }
+
     /// <summary>
     /// Body jiggle for farm animals. Heavy animals (cow, goat, sheep, pig, ostrich) get lower
     /// impulse and slower decay. Light animals (chicken, duck, rabbit) are bouncier.
@@ -1289,7 +1659,7 @@ public sealed class ModEntry : Mod
 
     private void SimulateIdle(Character character, Vector2 velocity)
     {
-        if (!this.config.EnableIdleMotion || velocity.LengthSquared() > 0.1f)
+        if (!this.config.EnableIdleMotion)
         {
             return;
         }
@@ -1299,7 +1669,35 @@ public sealed class ModEntry : Mod
             return;
         }
 
-        var key = this.GetCharacterKey(character);
+        var key      = this.GetCharacterKey(character);
+        var speed    = velocity.LengthSquared();
+        var idleStr  = Math.Max(0.05f, this.config.IdleMotionStrength);
+
+        // ── Slow-walk micro-sway (fires at low velocity, keeps physics active during meandering)
+        // Very subtle step-rhythm sway so body physics never go completely dormant while walking.
+        if (speed > 0.001f && speed < 2.5f)
+        {
+            // Phase-locked to character key so each character has a unique walk rhythm
+            if (Game1.ticks % 22 == key % 22)
+            {
+                var walkPhase    = (Game1.ticks / 22 % 2 == 0) ? 1f : -1f;
+                var walkMicro    = new Vector2(walkPhase * 0.06f * idleStr, 0.03f * idleStr);
+                var bMicro       = this.bodyImpulse.TryGetValue(key, out var bm) ? bm : Vector2.Zero;
+                this.bodyImpulse[key] = bMicro + walkMicro;
+
+                if (this.config.EnableHairPhysics)
+                {
+                    var hMicro = this.hairImpulse.TryGetValue(key, out var hm) ? hm : Vector2.Zero;
+                    this.hairImpulse[key] = hMicro + walkMicro * (this.config.HairStrength * 0.3f);
+                }
+            }
+        }
+
+        // Only run breathing and full idle bursts when standing still or nearly so
+        if (speed > 0.1f)
+        {
+            return;
+        }
 
         // ── Always-active breathing pulse (every 45 ticks, very subtle) ─────────
         // Fires regardless of the main idle interval — keeps body/hair gently alive at all times.
@@ -1307,8 +1705,8 @@ public sealed class ModEntry : Mod
         {
             var breathPhase = (Game1.ticks / 45) % 2 == 0 ? -1f : 1f;
             var breathImpulse = new Vector2(
-                (Game1.random.NextSingle() - 0.5f) * 0.04f,
-                breathPhase * 0.06f);
+                (Game1.random.NextSingle() - 0.5f) * 0.04f * idleStr,
+                breathPhase * 0.06f * idleStr);
 
             var bEntry = this.bodyImpulse.TryGetValue(key, out var bExist) ? bExist : Vector2.Zero;
             this.bodyImpulse[key] = bEntry + breathImpulse;
@@ -1317,6 +1715,26 @@ public sealed class ModEntry : Mod
             {
                 var hEntry = this.hairImpulse.TryGetValue(key, out var hExist) ? hExist : Vector2.Zero;
                 this.hairImpulse[key] = hEntry + breathImpulse * (this.config.HairStrength * 0.25f);
+            }
+        }
+
+        // ── Weather-reactive micro-pulse: shiver in cold/rain, sway in wind ─────
+        if (Game1.ticks % 30 == (key + 7) % 30)
+        {
+            if (this.currentRainStrength > 0.1f && Game1.currentLocation?.IsOutdoors == true)
+            {
+                // Shiver: rapid small left-right jitter (cold wet body)
+                var shiverDir = (Game1.ticks / 30 % 2 == 0) ? 1f : -1f;
+                var shiver = new Vector2(shiverDir * 0.08f * idleStr, 0f);
+                var bShiver = this.bodyImpulse.TryGetValue(key, out var bs) ? bs : Vector2.Zero;
+                this.bodyImpulse[key] = bShiver + shiver;
+            }
+            else if (this.currentWindStrength > 0.15f && Game1.currentLocation?.IsOutdoors == true)
+            {
+                // Wind buffet: whole body sways slightly in wind direction
+                var buffet = new Vector2(this.currentWindStrength * 0.06f * idleStr, 0f);
+                var bBuffet = this.bodyImpulse.TryGetValue(key, out var bb) ? bb : Vector2.Zero;
+                this.bodyImpulse[key] = bBuffet + buffet;
             }
         }
 
@@ -1329,60 +1747,109 @@ public sealed class ModEntry : Mod
 
         var impulse = this.bodyImpulse.TryGetValue(key, out var existing) ? existing : Vector2.Zero;
 
-        // Weighted idle type selection — more dramatic types more common than before
+        // Extended idle type selection — many more contextual types
         var animRoll = Game1.random.NextDouble();
         Vector2 idleImpulse;
-        if (animRoll < 0.18)
+
+        // Weather/season-contextual idles (checked first, override generic)
+        if (animRoll < 0.07 && this.currentRainStrength > 0.2f && Game1.currentLocation?.IsOutdoors == true)
+        {
+            // Shudder: full-body shiver from being cold and wet
+            idleImpulse = new Vector2(
+                (Game1.random.NextSingle() - 0.5f) * 0.30f * idleStr,
+                (Game1.random.NextSingle() - 0.5f) * 0.12f * idleStr);
+        }
+        else if (animRoll < 0.12 && this.currentSnowStrength > 0f && Game1.currentLocation?.IsOutdoors == true)
+        {
+            // Rub arms: strong lateral then settle inward (cold)
+            var side = Game1.random.NextDouble() < 0.5 ? 1f : -1f;
+            idleImpulse = new Vector2(side * 0.40f * idleStr, 0.05f * idleStr);
+        }
+        else if (animRoll < 0.16 && Game1.IsSummer && !Game1.isRaining && Game1.currentLocation?.IsOutdoors == true)
+        {
+            // Fan/cool self: one arm raised with a tilting lean (hot day)
+            idleImpulse = new Vector2(0.10f * idleStr, -0.28f * idleStr);
+        }
+        else if (animRoll < 0.20 && this.currentWindStrength > 0.2f && Game1.currentLocation?.IsOutdoors == true)
+        {
+            // Wind-blown: body pushed laterally as a gust hits
+            idleImpulse = new Vector2(this.currentWindStrength * 0.6f * idleStr, 0.05f * idleStr);
+        }
+        else if (animRoll < 0.28)
         {
             // Standard body sway
             idleImpulse = new Vector2(
                 Game1.random.NextSingle() - 0.5f,
-                Game1.random.NextSingle() - 0.5f) * 0.28f;
+                Game1.random.NextSingle() - 0.5f) * 0.28f * idleStr;
         }
-        else if (animRoll < 0.33)
+        else if (animRoll < 0.37)
         {
             // Hip sway: strong lateral push with minor vertical — most dramatic from behind
             var side = Game1.random.NextDouble() < 0.5 ? 1f : -1f;
-            idleImpulse = new Vector2(side * 0.50f, (Game1.random.NextSingle() - 0.5f) * 0.06f);
+            idleImpulse = new Vector2(side * 0.50f * idleStr, (Game1.random.NextSingle() - 0.5f) * 0.06f * idleStr);
         }
-        else if (animRoll < 0.47)
+        else if (animRoll < 0.44)
         {
             // Lean to one side: weight shift, slower wider arc
             var side = Game1.random.NextDouble() < 0.5 ? 1f : -1f;
-            idleImpulse = new Vector2(side * 0.38f, (Game1.random.NextSingle() - 0.5f) * 0.08f);
+            idleImpulse = new Vector2(side * 0.38f * idleStr, (Game1.random.NextSingle() - 0.5f) * 0.08f * idleStr);
         }
-        else if (animRoll < 0.59)
+        else if (animRoll < 0.51)
         {
             // Arm raise / stretch: strong upward then natural fall
             idleImpulse = new Vector2(
-                (Game1.random.NextSingle() - 0.5f) * 0.15f,
-                -0.55f);
+                (Game1.random.NextSingle() - 0.5f) * 0.15f * idleStr,
+                -0.55f * idleStr);
         }
-        else if (animRoll < 0.70)
+        else if (animRoll < 0.58)
         {
             // Bounce: rhythmic downward weight shift, like tapping foot
             idleImpulse = new Vector2(
-                (Game1.random.NextSingle() - 0.5f) * 0.06f,
-                0.40f);
+                (Game1.random.NextSingle() - 0.5f) * 0.06f * idleStr,
+                0.40f * idleStr);
         }
-        else if (animRoll < 0.80)
+        else if (animRoll < 0.65)
         {
-            // Shimmy: two rapid alternating lateral pushes
+            // Shimmy: strong rapid lateral push
             var side = Game1.random.NextDouble() < 0.5 ? 1f : -1f;
-            idleImpulse = new Vector2(side * 0.60f, 0.08f);
+            idleImpulse = new Vector2(side * 0.60f * idleStr, 0.08f * idleStr);
         }
-        else if (animRoll < 0.90)
+        else if (animRoll < 0.71)
         {
             // Deep breathing: slow oscillation in current phase
             idleImpulse = new Vector2(
-                (Game1.random.NextSingle() - 0.5f) * 0.05f,
-                (Game1.ticks / 30 % 2 == 0) ? -0.14f : 0.14f);
+                (Game1.random.NextSingle() - 0.5f) * 0.05f * idleStr,
+                ((Game1.ticks / 30 % 2 == 0) ? -0.14f : 0.14f) * idleStr);
+        }
+        else if (animRoll < 0.76)
+        {
+            // Look-around tilt: slight head-check lean to one side
+            var side = Game1.random.NextDouble() < 0.5 ? 1f : -1f;
+            idleImpulse = new Vector2(side * 0.22f * idleStr, -0.10f * idleStr);
+        }
+        else if (animRoll < 0.81)
+        {
+            // Subtle back-and-forth rock: small depth-axis simulation
+            var dir = (Game1.ticks / interval % 2 == 0) ? 1f : -1f;
+            idleImpulse = new Vector2(0f, dir * 0.20f * idleStr);
+        }
+        else if (animRoll < 0.87)
+        {
+            // Shoulder roll: diagonal push then settle
+            var angle = (float)(Game1.random.NextDouble() * Math.PI * 0.5) - (float)(Math.PI * 0.25);
+            idleImpulse = new Vector2((float)Math.Cos(angle) * 0.45f * idleStr, (float)Math.Sin(angle) * 0.35f * idleStr);
+        }
+        else if (animRoll < 0.93)
+        {
+            // Foot-tap + weight shift: quick downward then lateral
+            var side = Game1.random.NextDouble() < 0.5 ? 1f : -1f;
+            idleImpulse = new Vector2(side * 0.18f * idleStr, 0.32f * idleStr);
         }
         else
         {
             // Twirl: full diagonal circular push
             var angle = (float)(Game1.random.NextDouble() * Math.PI * 2.0);
-            idleImpulse = new Vector2((float)Math.Cos(angle), (float)Math.Sin(angle)) * 0.58f;
+            idleImpulse = new Vector2((float)Math.Cos(angle), (float)Math.Sin(angle)) * 0.58f * idleStr;
         }
 
         this.bodyImpulse[key] = impulse + idleImpulse;
@@ -1392,6 +1859,15 @@ public sealed class ModEntry : Mod
         {
             var hairImpulse = this.hairImpulse.TryGetValue(key, out var hi) ? hi : Vector2.Zero;
             this.hairImpulse[key] = hairImpulse + idleImpulse * (this.config.HairStrength * 0.5f);
+        }
+
+        // Clothing also reacts to idle burst — flowy clothes swing with the movement
+        if (this.config.EnableClothingFlowPhysics)
+        {
+            var flowType  = this.GetClothingFlowType(character);
+            var clothScale = flowType == ClothingFlowType.Flowy ? 0.55f : 0.25f;
+            var ci        = this.clothingImpulse.TryGetValue(key, out var cExist) ? cExist : Vector2.Zero;
+            this.clothingImpulse[key] = ci + idleImpulse * (clothScale * this.config.ClothingFlowStrength);
         }
     }
 
@@ -2776,19 +3252,26 @@ public sealed class ModEntry : Mod
             () => "How much vegetation bends when walked through or ragdolled into. 0 = off, 2 = very dramatic.", 0f, 2f, 0.05f);
 
         // ── Idle motion frequency ─────────────────────────────────────────────
-        api.AddSectionTitle(this.ModManifest, () => "Idle Motion Frequency");
+        api.AddSectionTitle(this.ModManifest, () => "Idle Motion & Variety");
         api.AddParagraph(this.ModManifest, () =>
             "Controls how often idle physics bursts fire when standing still. " +
-            "A built-in breathing pulse fires every 45 ticks (~0.75 s) regardless of this setting — " +
-            "it keeps body and hair gently alive at all times. " +
-            "The main idle burst (hip sway, shimmy, arm-raise, bounce, twirl, etc.) fires at the interval below.");
+            "A built-in breathing pulse fires every 45 ticks (~0.75 s) regardless of this setting. " +
+            "Weather-reactive idles fire at ~1 s intervals: shivers in rain/snow, wind-sway outdoors, fanning in summer. " +
+            "A slow-walk micro-sway fires every 22 ticks during very slow movement to keep physics active while meandering. " +
+            "The main idle burst (hip sway, shimmy, arm-raise, shoulder roll, lean, foot-tap, twirl, look-around, etc.) fires at the interval below.");
         api.AddNumberOption(this.ModManifest,
             () => (float)this.config.IdleMotionIntervalTicks,
             v => this.config.IdleMotionIntervalTicks = Math.Max(30, (int)v),
             () => "Idle burst interval (ticks)",
             () => "Ticks between major idle physics events. 90 = ~1.5 s (default), 30 = very frequent, 240 = infrequent. " +
-                  "The breathing pulse is always active and unaffected by this setting.",
+                  "Breathing, weather-reactive, and slow-walk micro-sways are always active.",
             30f, 300f, 15f);
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.IdleMotionStrength,
+            v => this.config.IdleMotionStrength = v,
+            () => "Idle motion strength",
+            () => "Overall scale for idle impulse magnitudes. 0.5 = subtle, 1.0 = default, 2.0 = very expressive.",
+            0.1f, 3f, 0.1f);
 
         // ── Debris & item physics ─────────────────────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "Debris & Item Physics");
@@ -2844,6 +3327,50 @@ public sealed class ModEntry : Mod
             () => "Magic cast impulse strength",
             () => "How strongly body and hair react to a spell cast. 1.0 = default, 2.0 = very dramatic. " +
                   "Air/Wind spells already have extra hair multiplier built in.", 0.1f, 3f, 0.1f);
+
+        // ── Clothing flow physics ─────────────────────────────────────────────
+        api.AddSectionTitle(this.ModManifest, () => "Clothing Flow Physics");
+        api.AddParagraph(this.ModManifest, () =>
+            "A separate physics layer sits on top of body physics to simulate realistic cloth movement. " +
+            "Clothing type is auto-detected from item name keywords:\n" +
+            "  Flowy (dress/robe/cape/cloak/skirt/gown/tunic/silk/kimono/wizard/maid/apron): " +
+            "large trailing lag, billows in wind, droops heavily in rain, floats in water, slow settle.\n" +
+            "  Tight (tights/shorts/bikini/crop/sport/athletic/fitted/jeans/armor): " +
+            "closely tracks body, minimal extra sway, barely affected by wind/rain.\n" +
+            "  Default (everything else): moderate trail and amplitude.\n" +
+            "The clothing offset is blended at ~42% scale on top of body physics — " +
+            "clothing visually trails and flows without clipping through body physics. " +
+            "Works with all vanilla and modded clothing items.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableClothingFlowPhysics, v => this.config.EnableClothingFlowPhysics = v,
+            () => "Enable clothing flow physics",
+            () => "Separate cloth-physics layer: flowy clothing trails and billows, tight clothing hugs body. " +
+                  "Blended on top of body physics without clipping.");
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.ClothingFlowStrength, v => this.config.ClothingFlowStrength = v,
+            () => "Clothing flow strength",
+            () => "How much clothing flows beyond body physics. 0 = no extra cloth sway, 1 = default trail, 2 = very dramatic billow.",
+            0f, 2f, 0.05f);
+
+        // ── New physics triggers ──────────────────────────────────────────────
+        api.AddSectionTitle(this.ModManifest, () => "Additional Physics Triggers");
+        api.AddParagraph(this.ModManifest, () =>
+            "Extra events that trigger physics impulses beyond movement and combat:\n" +
+            "  Warp-step: body bounce + hair toss + clothing resettlement when stepping through doors.\n" +
+            "  Eating/drinking: chin-dip lean impulse when the farmer begins eating.\n" +
+            "  Lightning flinch: full-body startle + hair electric whip + screen flash on lightning strike.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableWarpStepImpulse, v => this.config.EnableWarpStepImpulse = v,
+            () => "Enable warp-step impulse",
+            () => "Body bounce and hair toss when the farmer steps through a door, warp point, or teleport.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableEatingBounce, v => this.config.EnableEatingBounce = v,
+            () => "Enable eating/drinking bounce",
+            () => "Slight chin-dip body lean and hair swing when the farmer starts eating or drinking.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableLightningFlinch, v => this.config.EnableLightningFlinch = v,
+            () => "Enable lightning flinch",
+            () => "Sharp random-direction body flinch + electric hair whip + brief screen flash when lightning strikes outdoors.");
 
         // ── Gender overrides ──────────────────────────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "Gender Overrides");
