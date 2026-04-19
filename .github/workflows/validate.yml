@@ -71,6 +71,7 @@ jobs:
           required=(
             "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/manifest.json"
             "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/README.txt"
+            "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/SVPPhysics.dll"
             "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/presets.json"
             "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/spriteProfiles.json"
             "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/monsterArchetypes.json"
@@ -87,6 +88,8 @@ jobs:
           done
           if [[ $missing -ne 0 ]]; then
             echo "ERROR: Required files are missing from the installable mod folder."
+            echo "       Run build-package.sh (Linux/macOS) or build-package.ps1 (Windows)"
+            echo "       then commit SVPPhysics.dll into the mod folder."
             exit 1
           fi
           echo "All required files present."

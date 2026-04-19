@@ -49,7 +49,6 @@ public sealed class ModEntry : Mod
     private int levelUpBounceTicksRemaining = 0;
 
     // ── Fishing physics state ──────────────────────────────────────────────────
-    private bool wasFishingRodActive = false;   // was the player holding a fishing rod last tick?
     private bool wasBobberInAir = false;        // was the bobber still flying last tick?
     private bool wasFishBiting = false;         // was a fish on the hook last tick?
     private bool wasFishCaught = false;         // was a fish caught last tick?
@@ -658,7 +657,6 @@ public sealed class ModEntry : Mod
         this.levelUpBounceTicksRemaining = 0;
         this.dragonRagdollCooldown.Clear();
         this.idleCycleStep.Clear();
-        this.wasFishingRodActive = false;
         this.wasBobberInAir = false;
         this.wasFishBiting = false;
         this.wasFishCaught = false;
@@ -1922,7 +1920,7 @@ public sealed class ModEntry : Mod
     /// </summary>
     private void TryScatterClothing(Farmer farmer)
     {
-        if (!this.config.EnableClothingPhysicsModifier || Game1.currentLocation is null)
+        if (Game1.currentLocation is null)
         {
             return;
         }
@@ -2389,8 +2387,7 @@ public sealed class ModEntry : Mod
             }
         }
 
-        this.wasFishingRodActive = rodActive;
-        this.wasBobberInAir      = bobberInAir;
+        this.wasBobberInAir = bobberInAir;
         this.wasFishBiting       = fishBiting;
         this.wasFishCaught       = fishCaught;
     }
