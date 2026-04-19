@@ -1,2 +1,2 @@
-# Stardew-valley SVP physics collisions, hitstops, idles ragdolls and more
+# Stardew-valley mod which should reflect its name in files and repository old name needs updating new name is  SVP physics collisions, hitstops, idles ragdolls and more
 Mod to add jiggle physics to bodys and hair physics,hitstops, collisions, ragdolls and force , all human bodies, animals, pets , and monsters physics collisions hitstopts etc and some new animations to make character move body more to show off physics supports all creatures items walls humans weapons etc both vanilla and non vanilla 
