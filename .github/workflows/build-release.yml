@@ -138,19 +138,24 @@ jobs:
           unzip -q /tmp/smapi.zip -d /tmp/smapi
 
           # Copy SMAPI runtime DLLs into the game folder so the build can reference them
-          SMAPI_GAME=$(find /tmp/smapi -type d -name "game" | head -1)
-          if [ -z "$SMAPI_GAME" ]; then
-            # Fallback: look for the DLL anywhere in the extract
-            SMAPI_DLL=$(find /tmp/smapi -name "StardewModdingAPI.dll" | head -1)
-            if [ -n "$SMAPI_DLL" ]; then
-              cp "$(dirname "$SMAPI_DLL")"/*.dll "$STARDEW_PATH/"
-              # Copy smapi-internal folder if present
-              SMAPI_INTERNAL="$(dirname "$SMAPI_DLL")/smapi-internal"
-              [ -d "$SMAPI_INTERNAL" ] && cp -r "$SMAPI_INTERNAL" "$STARDEW_PATH/"
-            fi
-          else
-            cp "$SMAPI_GAME"/*.dll "$STARDEW_PATH/"
-            [ -d "$SMAPI_GAME/smapi-internal" ] && cp -r "$SMAPI_GAME/smapi-internal" "$STARDEW_PATH/"
+          SMAPI_DLL=$(find /tmp/smapi -name "StardewModdingAPI.dll" -type f | head -1)
+
+          if [ -z "$SMAPI_DLL" ]; then
+            echo "ERROR: StardewModdingAPI.dll not found in SMAPI release"
+            echo "Contents of /tmp/smapi:"
+            find /tmp/smapi -type f -name "*.dll" | head -20
+            exit 1
+          fi
+
+          SMAPI_DIR="$(dirname "$SMAPI_DLL")"
+          echo "Found SMAPI DLLs in: $SMAPI_DIR"
+
+          # Copy all DLLs from the SMAPI directory
+          cp "$SMAPI_DIR"/*.dll "$STARDEW_PATH/"
+
+          # Copy smapi-internal folder if present
+          if [ -d "$SMAPI_DIR/smapi-internal" ]; then
+            cp -r "$SMAPI_DIR/smapi-internal" "$STARDEW_PATH/"
           fi
 
           # Verify
