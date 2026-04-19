@@ -1,2 +1,2 @@
-# Stardew-valley-hdt-hair-and-body-physics-
-Mod to add jiggle physics and hdt hair to stardew 
+# Stardew-valley SVP physics collisions, hitstops, idles ragdolls and more
+Mod to add jiggle physics to bodys and hair physics,hitstops, collisions, ragdolls and force , all human bodies, animals, pets , and monsters physics collisions hitstopts etc and some new animations to make character move body more to show off physics supports all creatures items walls humans weapons etc both vanilla and non vanilla 
