@@ -4272,7 +4272,8 @@ public sealed class ModEntry : Mod
     /// </summary>
     private void SpawnTypedDebris(Vector2 worldPos, PhysicsParticleKind kind, int count, float speed = 1f)
     {
-        var strength = this.config.DebrisPhysicsStrength;
+        var strength      = this.config.DebrisPhysicsStrength;
+        var baseLT        = this.config.TypedDebrisLifetimeTicks;
 
         for (int i = 0; i < count; i++)
         {
@@ -4283,27 +4284,25 @@ public sealed class ModEntry : Mod
 
             var angle = Game1.random.NextSingle() * MathF.PI * 2f;
 
-            // Per-kind physics constants
-            var (minSpd, maxSpd, upBias) = kind switch
+            // Per-kind spawn constants: (minSpd, maxSpd, upBias, minSpin, maxSpin, minSize, maxSize, lifetimeMult)
+            var (minSpd, maxSpd, upBias, minSpin, maxSpin, minSz, maxSz, lifeMult) = kind switch
             {
-                PhysicsParticleKind.WoodSplinter => (1.5f,  3.5f, 0.5f),
-                PhysicsParticleKind.Sawdust      => (0.4f,  1.2f, 0.3f),
-                PhysicsParticleKind.StoneChunk   => (2.0f,  5.0f, 0.5f),
-                PhysicsParticleKind.OreChunk     => (1.8f,  4.5f, 0.5f),
-                PhysicsParticleKind.GemChunk     => (2.5f,  6.0f, 0.4f),
-                _                                => (1.5f,  3.5f, 0.5f),
+                PhysicsParticleKind.WoodSplinter => (1.5f, 3.5f, 0.5f, 0.05f, 0.22f, 2.5f, 4.5f, 1.00f),
+                PhysicsParticleKind.Sawdust      => (0.4f, 1.2f, 0.3f, 0.00f, 0.06f, 1.2f, 2.5f, 0.40f),
+                PhysicsParticleKind.StoneChunk   => (2.0f, 5.0f, 0.5f, 0.04f, 0.18f, 3.5f, 6.0f, 1.10f),
+                PhysicsParticleKind.OreChunk     => (1.8f, 4.5f, 0.5f, 0.04f, 0.16f, 3.0f, 5.5f, 1.05f),
+                PhysicsParticleKind.GemChunk     => (2.5f, 6.0f, 0.4f, 0.06f, 0.24f, 2.8f, 4.5f, 0.90f),
+                _                                => (1.5f, 3.5f, 0.5f, 0.05f, 0.20f, 2.5f, 4.5f, 1.00f),
             };
 
             var magnitude = (minSpd + Game1.random.NextSingle() * (maxSpd - minSpd)) * speed * strength;
-            var vel = new Vector2(MathF.Cos(angle) * magnitude, MathF.Sin(angle) * magnitude);
-            // Bias upward (negative Y) to produce a burst-outward arc
+            var vel       = new Vector2(MathF.Cos(angle) * magnitude, MathF.Sin(angle) * magnitude);
             vel.Y -= (MathF.Abs(vel.Y) * upBias + magnitude * 0.3f);
 
-            var lifetime = this.config.TypedDebrisLifetimeTicks;
-            if (kind == PhysicsParticleKind.Sawdust)
-            {
-                lifetime = Math.Max(120, (int)(lifetime * 0.40f)); // sawdust fades fast
-            }
+            var spinSign = (Game1.random.Next(2) == 0) ? 1f : -1f;
+            var spin     = (minSpin + Game1.random.NextSingle() * (maxSpin - minSpin)) * speed * spinSign;
+            var size     = minSz + Game1.random.NextSingle() * (maxSz - minSz);
+            var lifetime = Math.Max(60, (int)(baseLT * lifeMult));
 
             var particle = new TypedPhysicsParticle
             {
@@ -4312,10 +4311,11 @@ public sealed class ModEntry : Mod
                     (Game1.random.NextSingle() - 0.5f) * 10f),
                 Velocity         = vel,
                 Rotation         = Game1.random.NextSingle() * MathF.PI * 2f,
-                RotationVelocity = (Game1.random.NextSingle() - 0.5f) * 0.25f * speed,
+                RotationVelocity = spin,
                 AgeTicks         = 0,
                 MaxAgeTicks      = lifetime,
                 Kind             = kind,
+                Size             = size,
                 HasBounced       = false,
             };
             this.typedParticles.Add(particle);
@@ -4354,46 +4354,55 @@ public sealed class ModEntry : Mod
                 continue;
             }
 
-            // Per-kind gravity and drag constants
-            var (gravity, drag) = p.Kind switch
+            // Per-kind simulation constants: (gravity, drag, bounceCoeff, scatterRadius, scatterSensitivity)
+            // scatterSensitivity: 1 = full, 0.3 = heavy chunk barely moves
+            var (gravity, drag, bounceCoeff, scatterRadius, scatterSensitivity) = p.Kind switch
             {
-                PhysicsParticleKind.WoodSplinter => (0.12f, 0.97f),
-                PhysicsParticleKind.Sawdust      => (0.04f, 0.92f),
-                PhysicsParticleKind.StoneChunk   => (0.22f, 0.98f),
-                PhysicsParticleKind.OreChunk     => (0.18f, 0.97f),
-                PhysicsParticleKind.GemChunk     => (0.10f, 0.96f),
-                _                                => (0.15f, 0.97f),
+                PhysicsParticleKind.WoodSplinter => (0.12f, 0.97f, 0.38f, 55f, 0.75f),
+                PhysicsParticleKind.Sawdust      => (0.04f, 0.92f, 0.20f, 80f, 1.00f),
+                PhysicsParticleKind.StoneChunk   => (0.22f, 0.98f, 0.42f, 35f, 0.35f),
+                PhysicsParticleKind.OreChunk     => (0.18f, 0.97f, 0.40f, 38f, 0.40f),
+                PhysicsParticleKind.GemChunk     => (0.10f, 0.96f, 0.50f, 45f, 0.60f),
+                _                                => (0.15f, 0.97f, 0.38f, 50f, 0.60f),
             };
 
-            // Gravity (positive Y = toward bottom of screen)
+            // Gravity
             p.Velocity.Y += gravity;
 
-            // One-time bounce: when the particle is falling fast enough, reflect Y velocity
+            // One-time bounce with per-kind coefficient
             if (!p.HasBounced && p.AgeTicks > 8 && p.Velocity.Y > 1.8f)
             {
-                p.Velocity.Y   *= -0.35f;
-                p.Velocity.X   *= 0.70f;
-                p.RotationVelocity *= 1.4f; // bouncing makes it spin faster
-                p.HasBounced    = true;
+                p.Velocity.Y       *= -bounceCoeff;
+                p.Velocity.X       *= 0.70f;
+                p.RotationVelocity *= 1.4f;
+                p.HasBounced        = true;
             }
 
             // Air resistance
             p.Velocity         *= drag;
             p.RotationVelocity *= drag;
 
-            // Walk-scatter impulse: player walking nearby kicks debris away
+            // Walk-scatter: older particles need a stronger shove ("resting" resistance)
+            // ageResistance ramps from 0 → 1 over the first 120 ticks (2 s).
+            // Fresh particles scatter easily; settled ones need ~3× more force.
             if (scatterStr > 0f && playerMoved)
             {
                 var dist = Vector2.Distance(p.Position, playerPos);
-                if (dist < 60f && dist > 0.5f)
+                if (dist < scatterRadius && dist > 0.5f)
                 {
                     var scatterDir = Vector2.Normalize(p.Position - playerPos);
                     if (!float.IsNaN(scatterDir.X) && !float.IsNaN(scatterDir.Y))
                     {
-                        var falloff    = 1f - dist / 60f;
-                        var scatterMag = playerVel.Length() * falloff * scatterStr * 0.8f;
-                        p.Velocity            += scatterDir * scatterMag;
-                        p.RotationVelocity    += (Game1.random.NextSingle() - 0.5f) * scatterMag * 0.2f;
+                        var falloff         = 1f - dist / scatterRadius;
+                        var ageResistance   = Math.Min(1f, p.AgeTicks / 120f); // 0 fresh → 1 settled
+                        var wakeThreshold   = ageResistance * 0.6f;           // settled needs stronger push
+                        var rawMag          = playerVel.Length() * falloff * scatterStr * scatterSensitivity;
+                        if (rawMag > wakeThreshold)
+                        {
+                            var scatterMag         = (rawMag - wakeThreshold) * (1f - ageResistance * 0.5f);
+                            p.Velocity            += scatterDir * scatterMag;
+                            p.RotationVelocity    += (Game1.random.NextSingle() - 0.5f) * scatterMag * 0.2f;
+                        }
                     }
                 }
             }
@@ -4480,7 +4489,6 @@ public sealed class ModEntry : Mod
     {
         if (this.typedParticles.Count == 0) return;
 
-        // Lazily create the pixel texture
         if (this.pixelTexture is null || this.pixelTexture.IsDisposed)
         {
             if (Game1.graphics?.GraphicsDevice is null) return;
@@ -4492,22 +4500,35 @@ public sealed class ModEntry : Mod
 
         foreach (var p in this.typedParticles)
         {
-            // Fade out over the final 25 % of the particle's life
             var lifeRatio = (float)p.AgeTicks / p.MaxAgeTicks;
-            var alpha     = lifeRatio > 0.75f ? (1f - lifeRatio) / 0.25f : 1f;
-            alpha         = Math.Clamp(alpha, 0f, 1f);
 
-            var (color, size) = p.Kind switch
+            // Per-kind fade window: dust-like materials fade gradually over most of their life,
+            // solid chunks fade only over the last 25 %.
+            float alpha;
+            if (p.Kind == PhysicsParticleKind.Sawdust)
             {
-                PhysicsParticleKind.WoodSplinter => (new Color(139,  90,  43, (int)(alpha * 220f)), 3.5f),
-                PhysicsParticleKind.Sawdust      => (new Color(210, 180, 140, (int)(alpha * 150f)), 2.0f),
-                PhysicsParticleKind.StoneChunk   => (new Color(130, 130, 130, (int)(alpha * 240f)), 4.5f),
-                PhysicsParticleKind.OreChunk     => (new Color(184, 115,  51, (int)(alpha * 240f)), 3.5f),
-                PhysicsParticleKind.GemChunk     => (new Color(100, 200, 255, (int)(alpha * 255f)), 3.0f),
-                _                                => (new Color(180, 180, 180, (int)(alpha * 200f)), 3.0f),
+                // Fade starts at 30 % of life → fully transparent at 100 %
+                alpha = lifeRatio < 0.30f ? 1f : (1f - lifeRatio) / 0.70f;
+            }
+            else
+            {
+                // Fade over the final 25 %
+                alpha = lifeRatio > 0.75f ? (1f - lifeRatio) / 0.25f : 1f;
+            }
+            alpha = Math.Clamp(alpha, 0f, 1f);
+
+            // Per-kind base colour; size comes from the particle's stored value (varied at spawn)
+            var color = p.Kind switch
+            {
+                PhysicsParticleKind.WoodSplinter => new Color(139,  90,  43, (int)(alpha * 220f)),
+                PhysicsParticleKind.Sawdust      => new Color(210, 180, 140, (int)(alpha * 150f)),
+                PhysicsParticleKind.StoneChunk   => new Color(130, 130, 130, (int)(alpha * 240f)),
+                PhysicsParticleKind.OreChunk     => new Color(184, 115,  51, (int)(alpha * 240f)),
+                PhysicsParticleKind.GemChunk     => new Color(100, 200, 255, (int)(alpha * 255f)),
+                _                                => new Color(180, 180, 180, (int)(alpha * 200f)),
             };
 
-            if (color.A < 4) continue; // fully transparent — skip draw call
+            if (color.A < 4) continue;
 
             var screenPos = Game1.GlobalToLocal(Game1.viewport, p.Position);
 
@@ -4517,10 +4538,10 @@ public sealed class ModEntry : Mod
                 null,
                 color,
                 p.Rotation,
-                new Vector2(0.5f, 0.5f),      // centre-origin for rotation
-                size * zoom,
+                new Vector2(0.5f, 0.5f),
+                p.Size * zoom,
                 SpriteEffects.None,
-                0.91f);                        // draw on top of terrain, behind UI
+                0.91f);
         }
     }
 

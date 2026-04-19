@@ -927,6 +927,12 @@ public sealed class TypedPhysicsParticle
     public PhysicsParticleKind Kind;
 
     /// <summary>
+    /// Rendered size in game-pixel units (before zoom scaling).
+    /// Set at spawn time using per-kind size range so particles vary even within the same kind.
+    /// </summary>
+    public float Size;
+
+    /// <summary>
     /// Set to <c>true</c> after the particle has already bounced once.
     /// Prevents infinite multi-bounces.
     /// </summary>
