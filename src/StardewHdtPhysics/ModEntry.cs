@@ -1758,8 +1758,6 @@ public sealed class ModEntry : Mod
         {
             breastMult = lowerBodyMult = 1f;
         }
-        // Legacy single mult for places that still need it (belly, base inertia)
-        var clothingMult = (breastMult + lowerBodyMult) * 0.5f;
 
         // Gender-swap detection: flip profile if sprite texture signals a swap
         if (this.config.EnableGenderSwapDetection)
@@ -1768,8 +1766,10 @@ public sealed class ModEntry : Mod
             if (swapped.HasValue) profile = swapped.Value;
         }
 
-        // Base inertia lag: body resists direction change (mass effect)
-        impulse += new Vector2(-velocity.X, -velocity.Y) * ((0.03f + (baseStrength * 0.04f)) * clothingMult);
+        // Base inertia lag: body resists direction change (mass effect).
+        // Uses the average of both region mults — a neutral whole-body inertia effect.
+        var inertiaClothingMult = (breastMult + lowerBodyMult) * 0.5f;
+        impulse += new Vector2(-velocity.X, -velocity.Y) * ((0.03f + (baseStrength * 0.04f)) * inertiaClothingMult);
 
         // ── Directional body physics ──────────────────────────────────────────
         // Each facing direction produces a distinct jiggle signature for breast/butt/groin.
@@ -1816,10 +1816,10 @@ public sealed class ModEntry : Mod
                                 (Game1.random.NextSingle() - 0.5f) * bStr * 0.08f,  // outward flare
                                 bStr * 0.05f * speed);  // downward settle
                         }
-                        // Belly bounce toward camera
+                        // Belly bounce toward camera — shirt-covered, use breastMult (not lowerBodyMult)
                         impulse += new Vector2(
-                            (Game1.random.NextSingle() - 0.5f) * this.config.FemaleBellyStrength * clothingMult * 0.04f,
-                            -Math.Abs(velocity.Y) * this.config.FemaleBellyStrength * clothingMult * 0.06f);
+                            (Game1.random.NextSingle() - 0.5f) * this.config.FemaleBellyStrength * breastMult * 0.04f,
+                            -Math.Abs(velocity.Y) * this.config.FemaleBellyStrength * breastMult * 0.06f);
                         // Thigh jiggle
                         impulse += new Vector2(0f, Math.Abs(velocity.Y) * thStr * 0.04f);
                         break;
@@ -1898,7 +1898,7 @@ public sealed class ModEntry : Mod
             impulse *= 0.82f;
             this.bodyImpulse[key] = impulse;
             // Also drive spring bones (water still moves body parts around)
-            this.StepBoneGroup(key, profile, impulse * 0.5f);
+            this.StepBoneGroup(key, profile, impulse * 0.5f, breastMult, lowerBodyMult);
             return;
         }
 
@@ -1914,16 +1914,27 @@ public sealed class ModEntry : Mod
         this.bodyImpulse[key] = impulse;
 
         // ── Drive per-bone spring simulation ──────────────────────────────────
-        // The accumulated body impulse is the external force input to the spring engine.
-        // Each bone distributes this force with its own anatomical scaling.
-        this.StepBoneGroup(key, profile, impulse);
+        // Pass per-region mults so each bone is only dampened by clothing that covers it.
+        // Hat and boots have zero effect on breast/belly (breastMult unaffected by them).
+        // Shirt has zero effect on butt/thigh/groin (lowerBodyMult unaffected by it).
+        this.StepBoneGroup(key, profile, impulse, breastMult, lowerBodyMult);
     }
 
     /// <summary>
     /// Advance (or lazily create) the BoneGroup for this character by one tick.
     /// The external force is the body-center impulse computed by SimulateBody.
     /// </summary>
-    private void StepBoneGroup(int key, BodyProfileType profile, Vector2 externalForce)
+    /// <summary>
+    /// Advance (or lazily create) the BoneGroup for this character by one tick.
+    /// The external force is the body-center impulse computed by SimulateBody.
+    /// <paramref name="breastMult"/> and <paramref name="lowerBodyMult"/> are the per-region
+    /// clothing dampening values — passed directly into BoneGroup.Step so each bone
+    /// only feels dampening from the clothing slot that actually covers it:
+    ///   breastMult    — from shirt only (hat/pants/boots have no effect on breast/belly)
+    ///   lowerBodyMult — from pants+boots only (hat/shirt have no effect on butt/thigh/groin)
+    /// </summary>
+    private void StepBoneGroup(int key, BodyProfileType profile, Vector2 externalForce,
+        float breastMult = 1f, float lowerBodyMult = 1f)
     {
         if (!this.boneGroups.TryGetValue(key, out var group))
         {
@@ -1931,7 +1942,9 @@ public sealed class ModEntry : Mod
             this.boneGroups[key] = group;
         }
 
-        group.Step(profile, externalForce, this.config.BoneStiffness, this.config.BoneDamping, this.config);
+        group.Step(profile, externalForce,
+            this.config.BoneStiffness, this.config.BoneDamping,
+            this.config, breastMult, lowerBodyMult);
     }
 
 
