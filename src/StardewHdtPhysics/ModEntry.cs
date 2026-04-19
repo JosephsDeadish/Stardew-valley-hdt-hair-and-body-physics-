@@ -4570,14 +4570,12 @@ public sealed class ModEntry : Mod
                 var pushDir = Vector2.Normalize(playerVelocity);
                 if (!float.IsNaN(pushDir.X) && !float.IsNaN(pushDir.Y))
                 {
-                    foreach (var chunk in debris.Chunks)
-                        chunk.velocity += pushDir * (impulseScale * strength);
+                    debris.velocity += pushDir * (impulseScale * strength);
                 }
             }
 
             // Apply drag so debris eventually settles
-            foreach (var chunk in debris.Chunks)
-                chunk.velocity *= drag;
+            debris.velocity *= drag;
         }
     }
 
@@ -4672,8 +4670,7 @@ public sealed class ModEntry : Mod
                 continue;
             }
 
-            foreach (var chunk in debris.Chunks)
-                chunk.velocity += kickDir * (kickStrength * toolMultiplier * strength);
+            debris.velocity += kickDir * (kickStrength * toolMultiplier * strength);
         }
     }
 
