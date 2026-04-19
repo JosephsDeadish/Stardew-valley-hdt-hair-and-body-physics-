@@ -911,7 +911,7 @@ public sealed class ModEntry : Mod
         // derived item or a Tool with a combat-sounding name.
         if (this.config.EnableNpcSwordKnockdown
             && Game1.player.CurrentTool is not null
-            && this.IsCombatCapableTool(Game1.player.CurrentTool)
+            && IsCombatCapableTool(Game1.player.CurrentTool)
             && Game1.currentLocation is not null)
         {
             foreach (var character in this.EnumerateHumanoids(Game1.currentLocation))
@@ -934,7 +934,7 @@ public sealed class ModEntry : Mod
         // Farm animal tool collision reaction — any non-utility tool causes a startle bounce
         if (this.config.EnableFarmAnimalPhysics
             && Game1.player.CurrentTool is not null
-            && this.IsCombatCapableTool(Game1.player.CurrentTool)
+            && IsCombatCapableTool(Game1.player.CurrentTool)
             && Game1.currentLocation is not null)
         {
             foreach (var animal in EnumerateFarmAnimals(Game1.currentLocation))
@@ -4444,7 +4444,7 @@ public sealed class ModEntry : Mod
                 {
                     var objName = obj.Name ?? string.Empty;
                     if (ContainsAny(objName, "Weed", "Fiber", "Wild", "Hay") ||
-                        obj.Category == StardewValley.Object.wildResultCategory)
+                        obj.Category == -17) // wildResultCategory removed in SDV 1.6; value was -17
                     {
                         hits++;
                     }
@@ -4570,12 +4570,14 @@ public sealed class ModEntry : Mod
                 var pushDir = Vector2.Normalize(playerVelocity);
                 if (!float.IsNaN(pushDir.X) && !float.IsNaN(pushDir.Y))
                 {
-                    debris.velocity += pushDir * (impulseScale * strength);
+                    foreach (var chunk in debris.Chunks)
+                        chunk.velocity += pushDir * (impulseScale * strength);
                 }
             }
 
             // Apply drag so debris eventually settles
-            debris.velocity *= drag;
+            foreach (var chunk in debris.Chunks)
+                chunk.velocity *= drag;
         }
     }
 
@@ -4670,7 +4672,8 @@ public sealed class ModEntry : Mod
                 continue;
             }
 
-            debris.velocity += kickDir * (kickStrength * toolMultiplier * strength);
+            foreach (var chunk in debris.Chunks)
+                chunk.velocity += kickDir * (kickStrength * toolMultiplier * strength);
         }
     }
 
@@ -6408,8 +6411,8 @@ public sealed class ModEntry : Mod
         bool eligible = character switch
         {
             Farmer                         => this.config.GearKnockOffAffectsPlayer,
-            StardewValley.NPC              => this.config.GearKnockOffAffectsNpcs,
             StardewValley.Monsters.Monster => this.config.GearKnockOffAffectsMonsters,
+            StardewValley.NPC              => this.config.GearKnockOffAffectsNpcs,
             _                              => false,
         };
         if (!eligible) return;

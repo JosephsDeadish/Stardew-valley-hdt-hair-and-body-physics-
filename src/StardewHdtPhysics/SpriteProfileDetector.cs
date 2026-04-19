@@ -32,7 +32,7 @@ public sealed class SpriteProfileDetector
     {
         // 1. Manual config override — highest priority, lets players correct any detection error.
         if (this.configOverrides.TryGetValue(character.Name, out var overrideValue)
-            && TryParseProfileType(overrideValue, out var overrideType))
+            && Enum.TryParse<BodyProfileType>(overrideValue, ignoreCase: true, out var overrideType))
         {
             return overrideType;
         }
