@@ -1031,7 +1031,7 @@ public sealed class ModEntry : Mod
                 break;
 
             default: // Generic
-                // Ambient ambient sway: slow gentle rock
+                // Ambient sway: slow gentle rock
                 idle = new Vector2((float)Math.Sin(t * 0.05f) * 0.010f, 0f) * strength;
                 break;
         }
@@ -1059,7 +1059,9 @@ public sealed class ModEntry : Mod
         var t        = Game1.ticks + (key & 0x3F); // per-animal phase offset
         var name     = animal.type.Value ?? string.Empty;
 
-        var existing = this.monsterBodyImpulse.TryGetValue(key, out var mi) ? mi : Vector2.Zero;
+        // Farm animal idle impulses feed into bodyImpulse (same dict that SimulateFarmAnimalBody uses)
+        // so they are actually visible through the render path.
+        var existing = this.bodyImpulse.TryGetValue(key, out var bi2) ? bi2 : Vector2.Zero;
         Vector2 idle;
 
         if (ContainsAny(name, "chicken", "hen", "rooster", "duck", "dinosaur"))
@@ -1098,7 +1100,7 @@ public sealed class ModEntry : Mod
 
         if (idle != Vector2.Zero)
         {
-            this.monsterBodyImpulse[key] = (existing + idle) * 0.88f;
+            this.bodyImpulse[key] = (existing + idle) * 0.88f;
         }
     }
 
@@ -1124,7 +1126,7 @@ public sealed class ModEntry : Mod
         // Step period scales inversely with speed: faster = more frequent steps
         var stepPeriod = Math.Max(8, (int)(22f / speed));
 
-        if (t % stepPeriod != (key & (stepPeriod - 1)) % stepPeriod) return;
+        if (t % stepPeriod != key % stepPeriod) return;
 
         var baseStr = profile switch
         {
@@ -1179,6 +1181,12 @@ public sealed class ModEntry : Mod
     {
         if (Game1.currentLocation is null || tool is null) return;
 
+        // Only apply combat VFX for actual combat/mining tools — skip watering cans, rods, hoes etc.
+        if (tool is not MeleeWeapon && tool is not Pickaxe && tool is not Axe)
+        {
+            return;
+        }
+
         var playerPos  = player.Position;
         var swingRange = 128f; // ~2 tiles
 
@@ -1216,11 +1224,11 @@ public sealed class ModEntry : Mod
         // ── Blood splatter ────────────────────────────────────────────────────
         if (this.config.EnableBloodSplatterEffects)
         {
-            // NPCs / monsters in range
-            foreach (var npc in Game1.currentLocation.characters)
+            // Only monsters take blood splatter — never friendly NPCs
+            foreach (var monster in this.EnumerateMonsters(Game1.currentLocation))
             {
-                if (Vector2.Distance(npc.Position, playerPos) > swingRange) continue;
-                this.SpawnBloodParticles(npc.Position, this.config.BloodSplatterIntensity);
+                if (Vector2.Distance(monster.Position, playerPos) > swingRange) continue;
+                this.SpawnBloodParticles(monster.Position, this.config.BloodSplatterIntensity);
             }
 
             // Farm animals in range
@@ -1316,14 +1324,11 @@ public sealed class ModEntry : Mod
         var checkTile = checkPos / 64f;
 
         // Check resource clumps (boulders, stumps) in the location
-        if (Game1.currentLocation is Farm || Game1.currentLocation is MineShaft || true)
+        foreach (var clump in Game1.currentLocation.resourceClumps)
         {
-            foreach (var clump in Game1.currentLocation.resourceClumps)
+            if (Vector2.Distance(clump.Tile * 64f, checkPos) < 96f)
             {
-                if (Vector2.Distance(clump.Tile * 64f, checkPos) < 96f)
-                {
-                    return true;
-                }
+                return true;
             }
         }
 
@@ -1334,6 +1339,21 @@ public sealed class ModEntry : Mod
             var objName = obj.Name ?? string.Empty;
             if (ContainsAny(objName, "stone", "rock", "ore", "metal", "iron", "copper", "iridium", "coal",
                                      "boulder", "wall", "chest", "furnace", "anvil", "forge"))
+            {
+                return true;
+            }
+        }
+
+        // Check Furniture objects at the facing tile (metal shelves, stone tiles, anvils, forges etc.)
+        // Furniture is a separate collection in the location and is not covered by location.objects.
+        foreach (var furniture in Game1.currentLocation.furniture)
+        {
+            if (furniture is null) continue;
+            var furniturePos = furniture.TileLocation * 64f;
+            if (Vector2.Distance(furniturePos, checkPos) > 128f) continue;
+            var fname = furniture.Name ?? string.Empty;
+            if (ContainsAny(fname, "stone", "metal", "iron", "forge", "anvil", "rock", "steel", "copper",
+                                   "wall", "slate", "ore", "cobble", "brick", "granite"))
             {
                 return true;
             }
