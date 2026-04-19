@@ -37,6 +37,10 @@ public sealed class ModEntry : Mod
     private Vector2 grassBendDisplacement = Vector2.Zero;
     private Vector2 grassBendVelocity = Vector2.Zero;
 
+    // SDV 1.6 removed Debris.velocity; we track per-debris velocity externally.
+    // ConditionalWeakTable auto-removes entries when the Debris object is GC'd.
+    private readonly ConditionalWeakTable<Debris, StrongBox<Vector2>> debrisVelocities = new();
+
     // ── Visual render wobble (applied during RenderingWorld, restored after) ──
     private readonly Dictionary<Character, Vector2> savedPhysicsPositions = new();
     private const float PhysicsVisualScale = 10f;  // px multiplier: impulse 0.4 → 4 px wobble
@@ -4565,17 +4569,25 @@ public sealed class ModEntry : Mod
             };
 
             // Walking through debris pushes it in the movement direction
+            var vel = this.debrisVelocities.GetOrCreateValue(debris);
             if (playerVelocity.LengthSquared() > 0.01f)
             {
                 var pushDir = Vector2.Normalize(playerVelocity);
                 if (!float.IsNaN(pushDir.X) && !float.IsNaN(pushDir.Y))
                 {
-                    debris.velocity += pushDir * (impulseScale * strength);
+                    vel.Value += pushDir * (impulseScale * strength);
                 }
             }
 
             // Apply drag so debris eventually settles
-            debris.velocity *= drag;
+            vel.Value *= drag;
+
+            // Apply accumulated velocity to chunk position (SDV 1.6: no Debris.velocity)
+            if (vel.Value.LengthSquared() > 0.0001f)
+            {
+                debris.Chunks[0].position.X += vel.Value.X;
+                debris.Chunks[0].position.Y += vel.Value.Y;
+            }
         }
     }
 
@@ -4670,7 +4682,12 @@ public sealed class ModEntry : Mod
                 continue;
             }
 
-            debris.velocity += kickDir * (kickStrength * toolMultiplier * strength);
+            var vel = this.debrisVelocities.GetOrCreateValue(debris);
+            vel.Value += kickDir * (kickStrength * toolMultiplier * strength);
+
+            // Apply immediately so the kick is visible this tick
+            debris.Chunks[0].position.X += vel.Value.X;
+            debris.Chunks[0].position.Y += vel.Value.Y;
         }
     }
 
@@ -5649,8 +5666,6 @@ public sealed class ModEntry : Mod
 
     // ── GMCM registration ─────────────────────────────────────────────────────
 
-    private bool gmcmRegistered = false;
-
     private void RegisterConfigMenu()
     {
         var api = this.Helper.ModRegistry.GetApi<IGenericModConfigMenuApi>("spacechase0.GenericModConfigMenu");
@@ -5658,10 +5673,6 @@ public sealed class ModEntry : Mod
         {
             return;
         }
-
-        // Only register once — GameLaunched re-calls this, which is fine; the second call
-        // just re-registers and GMCM replaces the old registration with the new one.
-        this.gmcmRegistered = true;
 
         api.Register(
             this.ModManifest,
