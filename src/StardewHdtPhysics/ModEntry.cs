@@ -118,6 +118,13 @@ public sealed class ModEntry : Mod
     // ── Hitstop ───────────────────────────────────────────────────────────────
     private int hitstopTicksRemaining = 0;
 
+    // ── Dislodged world objects ────────────────────────────────────────────────────
+    // Tracks small objects knocked loose by a wrong-tool hit.
+    // Key = tile position (packed int: x << 16 | y)
+    // Value = ticks remaining until the object returns to static state
+    private readonly Dictionary<int, int> dislodgedObjectSettleTicks = new();
+    private const int DislodgeSettleTicks = 360; // ~6 seconds to re-settle
+
     // ── Per-character idle cycling state ──────────────────────────────────────
     // Tracks which step (0-7) each character is on in their per-profile idle cycle.
     // Different characters start at different offsets so they don't all do the same move.
@@ -345,7 +352,7 @@ public sealed class ModEntry : Mod
                 && this.hairChains.TryGetValue(key, out var chain)
                 && !chain.IsNearRest())
             {
-                hairOffset = chain.GetTipDisplacement() * 0.18f * this.config.HairStrength;
+                hairOffset = chain.GetTipDisplacement() * 0.28f * this.config.HairStrength;
             }
 
             // ── Clothing flow ────────────────────────────────────────────────
@@ -408,6 +415,19 @@ public sealed class ModEntry : Mod
                 this.savedPhysicsPositions[monster] = monster.Position;
                 monster.Position += visOffM;
             }
+        }
+
+        // Screen shake during hitstop: jitter player position a few pixels
+        if (this.hitstopTicksRemaining > 0 && this.config.EnableHitstopEffect
+            && Game1.player is not null)
+        {
+            var shakeAmt = this.hitstopTicksRemaining * 0.8f; // stronger early in hitstop
+            var shakeOff = new Vector2(
+                (float)(Game1.random.NextDouble() * 2.0 - 1.0) * shakeAmt,
+                (float)(Game1.random.NextDouble() * 2.0 - 1.0) * shakeAmt);
+            if (!this.savedPhysicsPositions.ContainsKey(Game1.player))
+                this.savedPhysicsPositions[Game1.player] = Game1.player.Position;
+            Game1.player.Position += shakeOff;
         }
 
         // ── Farm animal bone/fur/tail render displacement ─────────────────────
@@ -2010,6 +2030,84 @@ public sealed class ModEntry : Mod
             }
         }
 
+        // ── NPC collision from scythe/axe ─────────────────────────────────────
+        // When a scythe or axe swings near a friendly NPC, apply a "bump" ragdoll impulse.
+        if (tool is MeleeWeapon mwScythe && mwScythe.Name.Contains("Scythe", StringComparison.OrdinalIgnoreCase) || tool is Axe)
+        {
+            foreach (var npc in Game1.currentLocation.characters.ToArray())
+            {
+                if (npc is null || npc.IsMonster) continue;
+                if (Vector2.Distance(npc.Position, playerPos) > swingRange) continue;
+
+                var npcKey = this.GetCharacterKey(npc);
+                var profile = this.detector.Resolve(npc);
+
+                var bumpDir = Vector2.Normalize(npc.Position - playerPos);
+                if (float.IsNaN(bumpDir.X)) bumpDir = new Vector2(0f, -1f);
+                var bumpImpulse = bumpDir * 0.45f;
+
+                var existBody = this.bodyImpulse.TryGetValue(npcKey, out var nb) ? nb : Vector2.Zero;
+                this.bodyImpulse[npcKey] = existBody + bumpImpulse;
+
+                if (this.boneGroups.TryGetValue(npcKey, out var nbg))
+                    nbg.ApplyImpulse(profile, bumpImpulse * 1.2f, this.config);
+
+                if (this.config.EnableHairPhysics)
+                {
+                    var hExist = this.hairImpulse.TryGetValue(npcKey, out var hv) ? hv : Vector2.Zero;
+                    this.hairImpulse[npcKey] = hExist + bumpImpulse * (this.config.HairStrength * 1.5f);
+                }
+
+                if (this.config.EnableHitstopEffect)
+                {
+                    this.hitstopTicksRemaining = Math.Max(this.hitstopTicksRemaining, 3);
+                    Game1.flashAlpha = Math.Max(Game1.flashAlpha, 0.25f);
+                }
+
+                if (this.config.EnableTypedPhysicsDebris)
+                    this.SpawnTypedDebris(npc.Position, PhysicsParticleKind.Sawdust, 2, 0.4f);
+            }
+        }
+
+        // ── Friendly NPC bump impulse ─────────────────────────────────────────
+        // Any tool swing near a friendly NPC applies a small body/hair impulse
+        // (cosmetic only — no damage, no relationship impact).
+        if (this.config.EnableBodyPhysics || this.config.EnableHairPhysics)
+        {
+            foreach (var npc in Game1.currentLocation.characters.ToArray())
+            {
+                if (npc is null || npc.IsMonster) continue;
+                if (npc.Name?.Equals("Horse", StringComparison.OrdinalIgnoreCase) == true) continue;
+                if (Vector2.Distance(npc.Position, playerPos) > swingRange) continue;
+
+                var npcKey  = this.GetCharacterKey(npc);
+                var npcProf = this.detector.Resolve(npc);
+                var bumpDir = Vector2.Normalize(npc.Position - playerPos);
+                if (float.IsNaN(bumpDir.X)) bumpDir = new Vector2(0f, -1f);
+
+                if (this.config.EnableBodyPhysics)
+                {
+                    var existBody = this.bodyImpulse.TryGetValue(npcKey, out var nb2) ? nb2 : Vector2.Zero;
+                    this.bodyImpulse[npcKey] = existBody + bumpDir * 0.35f;
+
+                    if (this.boneGroups.TryGetValue(npcKey, out var nbg2))
+                        nbg2.ApplyImpulse(npcProf, bumpDir * 0.40f, this.config);
+                }
+
+                if (this.config.EnableHairPhysics)
+                {
+                    var hExist = this.hairImpulse.TryGetValue(npcKey, out var hv2) ? hv2 : Vector2.Zero;
+                    this.hairImpulse[npcKey] = hExist + bumpDir * (this.config.HairStrength * 1.2f);
+                }
+
+                if (this.config.EnableHitstopEffect && this.config.EnableToolCollisionHitstop)
+                {
+                    this.hitstopTicksRemaining = Math.Max(this.hitstopTicksRemaining, 3);
+                    Game1.flashAlpha = Math.Max(Game1.flashAlpha, 0.20f);
+                }
+            }
+        }
+
         // ── Spark VFX + tool swing-back hitstop ───────────────────────────────
         if (this.config.EnableSparkEffects || this.config.EnableToolCollisionHitstop
             || this.config.EnableTypedPhysicsDebris)
@@ -2603,14 +2701,14 @@ public sealed class ModEntry : Mod
             return;
         }
 
-        // Feminine gets much slower decay = very jello-like, long lingering jiggles.
-        // Masculine gets medium. Androgynous slightly bouncier than masculine.
-        // Slightly increased from 0.80/0.86 to 0.83/0.88 to prevent perpetual drift.
+        // When character is not moving, decay impulse faster so bones settle quickly
+        // instead of continuing to drift/gyrate.
+        var movingFast = velocity.LengthSquared() > 0.04f;
         impulse *= profile switch
         {
-            BodyProfileType.Feminine  => 0.83f,
-            BodyProfileType.Masculine => 0.88f,
-            _                         => 0.86f
+            BodyProfileType.Feminine  => movingFast ? 0.83f : 0.72f,
+            BodyProfileType.Masculine => movingFast ? 0.88f : 0.78f,
+            _                         => movingFast ? 0.86f : 0.75f,
         };
 
         this.bodyImpulse[key] = impulse;
@@ -5317,6 +5415,46 @@ public sealed class ModEntry : Mod
                     shapeRadius: 5f,
                     visualSize:  4.0f + Game1.random.NextSingle() * 2.5f,
                     maxAgeTicks: 1200);  // 20 s
+            }
+
+            // ── Directional trunk roll ─────────────────────────────────────────
+            // Spawn a line of log-section chunks extending in a random fall direction,
+            // each with lateral roll velocity — simulates the trunk lying on the ground
+            // and tumbling after the tree falls.
+            var rollAngle = Game1.random.NextSingle() * MathF.PI * 2f;
+            var rollDir   = new Vector2(MathF.Cos(rollAngle), MathF.Sin(rollAngle));
+            var trunkLen  = 3 + Game1.random.Next(3); // 3–5 log sections
+            for (int tr = 0; tr < trunkLen; tr++)
+            {
+                // Sections fan out from the base, each a bit further along the fall direction
+                var segPos = worldPos + rollDir * (tr * 58f);
+                var segVel = rollDir * (1.0f + Game1.random.NextSingle() * 1.8f)
+                           + new Vector2(0f, -0.6f);   // slight upward arc
+                this.itemWorld.Spawn(
+                    segPos, segVel,
+                    ItemPhysicsMaterial.Wood,
+                    ItemPhysicsShape.Box,
+                    shapeRadius: 5.5f + tr * 1.2f,      // trunk widens toward the base
+                    visualSize:  5.0f + tr * 1.0f,
+                    maxAgeTicks: 1500 + tr * 100);
+            }
+
+            // Additional splinter burst along trunk line
+            if (this.config.EnableTypedPhysicsDebris)
+            {
+                for (int ts = 0; ts < 3; ts++)
+                {
+                    var sSplitPos = worldPos + rollDir * (ts * 45f);
+                    this.SpawnTypedDebris(sSplitPos, PhysicsParticleKind.WoodSplinter,
+                        3 + Game1.random.Next(3), 1.5f);
+                }
+            }
+
+            // Hitstop + flash for the tree thud (enhances impact feel)
+            if (this.config.EnableHitstopEffect)
+            {
+                this.hitstopTicksRemaining = Math.Max(this.hitstopTicksRemaining, 4);
+                Game1.flashAlpha = Math.Max(Game1.flashAlpha, 0.22f);
             }
 
             // Player body/hair impulse to simulate ground-thud camera shake
