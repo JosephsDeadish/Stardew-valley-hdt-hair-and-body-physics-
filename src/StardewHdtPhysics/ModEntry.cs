@@ -4,6 +4,7 @@ using StardewModdingAPI;
 using StardewModdingAPI.Events;
 using StardewValley;
 using StardewValley.Locations;
+using StardewValley.TerrainFeatures;
 using StardewValley.Tools;
 
 namespace StardewHdtPhysics;
@@ -280,6 +281,12 @@ public sealed class ModEntry : Mod
         {
             this.SimulateDebrisPhysics(location);
         }
+
+        // ── Crop / weed / grass collision for all creatures (every 3rd tick)
+        if (this.config.EnableCropWeedCollisionPhysics && e.IsMultipleOf(3))
+        {
+            this.SimulateCropWeedCollision(location);
+        }
     }
 
     private void OnButtonPressed(object? sender, ButtonPressedEventArgs e)
@@ -550,6 +557,57 @@ public sealed class ModEntry : Mod
             impulse += new Vector2(
                 (Game1.random.NextSingle() - 0.5f) * breastExtra * 0.3f,
                 0f);
+        }
+
+        // Directional body boost: facing away from camera (down) = back/butt most visible
+        // → breasts splay laterally, butt/thigh jiggle amplified; facing up = subtler
+        if (this.config.EnableDirectionalBodyBoost && velocity.LengthSquared() > 0.04f)
+        {
+            var facing = character.FacingDirection;
+            if (facing == 2) // down — walking away, back is the most visible surface
+            {
+                // Breast lateral splay: when facing away the breasts press outward at each step
+                if (profile == BodyProfileType.Feminine)
+                {
+                    var lateralSplay = this.config.FemaleBreastStrength * 0.05f * clothingMult;
+                    impulse += new Vector2(
+                        (Game1.random.NextSingle() - 0.5f) * 2f * lateralSplay,
+                        (Game1.random.NextSingle() - 0.5f) * lateralSplay * 0.3f);
+                }
+
+                // Butt amplification: posterior jiggle is very prominent from behind
+                var buttBoost = profile switch
+                {
+                    BodyProfileType.Feminine  => this.config.FemaleButtStrength  * 0.06f * clothingMult,
+                    BodyProfileType.Masculine => this.config.MaleButtStrength    * 0.055f * clothingMult,
+                    _                         => 0.025f * clothingMult
+                };
+                impulse += new Vector2(
+                    (Game1.random.NextSingle() - 0.5f) * buttBoost * 0.5f,
+                    Math.Abs(velocity.Y) * buttBoost * 1.8f); // strong up-down jiggle in walk direction
+            }
+            else if (facing == 0) // up — walking toward camera, front visible
+            {
+                // Belly and front bounce: belly swings forward with each step
+                var bellyBoost = profile switch
+                {
+                    BodyProfileType.Feminine  => this.config.FemaleBellyStrength * 0.04f * clothingMult,
+                    BodyProfileType.Masculine => this.config.MaleBellyStrength   * 0.035f * clothingMult,
+                    _                         => 0.02f * clothingMult
+                };
+                impulse += new Vector2(
+                    (Game1.random.NextSingle() - 0.5f) * bellyBoost * 0.4f,
+                    -Math.Abs(velocity.Y) * bellyBoost * 1.2f);
+            }
+        }
+
+        // Continuous micro-activity: very small random baseline so physics never go fully dormant.
+        // Simulates the constant tiny vibrations of breathing, muscle tension, and micro-movements.
+        if (baseStrength > 0f)
+        {
+            impulse += new Vector2(
+                (Game1.random.NextSingle() - 0.5f) * 0.008f * baseStrength,
+                (Game1.random.NextSingle() - 0.5f) * 0.006f * baseStrength);
         }
 
         // Swimming: water resistance — stronger movement wave but rapid oscillations are damped
@@ -1101,6 +1159,15 @@ public sealed class ModEntry : Mod
 
         // Movement-based flow
         impulse += new Vector2(-velocity.X, -velocity.Y) * (0.02f * this.config.HairStrength * windMult);
+
+        // Continuous micro-oscillation: sinusoidal noise ensures hair is never completely still.
+        // Uses per-character phase offset (key hash) so each character has a unique sway rhythm.
+        // Models air currents, breathing, and natural pendulum physics of hair.
+        var phase = this.GetCharacterKey(character) % 100 * 0.063f; // per-character phase
+        impulse += new Vector2(
+            (float)Math.Sin(Game1.ticks * 0.08f + phase) * 0.005f * this.config.HairStrength,
+            (Game1.random.NextSingle() - 0.5f) * 0.003f * this.config.HairStrength);
+
         impulse *= 0.88f;
 
         this.hairImpulse[key] = impulse;
@@ -1110,7 +1177,7 @@ public sealed class ModEntry : Mod
 
     private void SimulateIdle(Character character, Vector2 velocity)
     {
-        if (!this.config.EnableIdleMotion || velocity.LengthSquared() > 0.0001f)
+        if (!this.config.EnableIdleMotion || velocity.LengthSquared() > 0.1f)
         {
             return;
         }
@@ -1120,59 +1187,99 @@ public sealed class ModEntry : Mod
             return;
         }
 
-        if (Game1.ticks % 180 != (this.GetCharacterKey(character) % 180))
+        var key = this.GetCharacterKey(character);
+
+        // ── Always-active breathing pulse (every 45 ticks, very subtle) ─────────
+        // Fires regardless of the main idle interval — keeps body/hair gently alive at all times.
+        if (Game1.ticks % 45 == key % 45)
+        {
+            var breathPhase = (Game1.ticks / 45) % 2 == 0 ? -1f : 1f;
+            var breathImpulse = new Vector2(
+                (Game1.random.NextSingle() - 0.5f) * 0.04f,
+                breathPhase * 0.06f);
+
+            var bEntry = this.bodyImpulse.TryGetValue(key, out var bExist) ? bExist : Vector2.Zero;
+            this.bodyImpulse[key] = bEntry + breathImpulse;
+
+            if (this.config.EnableHairPhysics)
+            {
+                var hEntry = this.hairImpulse.TryGetValue(key, out var hExist) ? hExist : Vector2.Zero;
+                this.hairImpulse[key] = hEntry + breathImpulse * (this.config.HairStrength * 0.25f);
+            }
+        }
+
+        // ── Main idle burst (configurable interval, default 90 ticks = ~1.5 s) ─
+        var interval = Math.Max(30, this.config.IdleMotionIntervalTicks);
+        if (Game1.ticks % interval != key % interval)
         {
             return;
         }
 
-        var key = this.GetCharacterKey(character);
         var impulse = this.bodyImpulse.TryGetValue(key, out var existing) ? existing : Vector2.Zero;
 
-        // Pick a varied idle animation type to keep NPCs looking lively
-        // Weighted: wave is most common, followed by lean and arm-raise, twirl is rare
+        // Weighted idle type selection — more dramatic types more common than before
         var animRoll = Game1.random.NextDouble();
         Vector2 idleImpulse;
-        if (animRoll < 0.40)
+        if (animRoll < 0.18)
         {
-            // Standard body sway (original behavior)
+            // Standard body sway
             idleImpulse = new Vector2(
                 Game1.random.NextSingle() - 0.5f,
-                Game1.random.NextSingle() - 0.5f) * 0.24f;
+                Game1.random.NextSingle() - 0.5f) * 0.28f;
         }
-        else if (animRoll < 0.62)
+        else if (animRoll < 0.33)
         {
-            // Lean to one side: strong lateral push, minor vertical
+            // Hip sway: strong lateral push with minor vertical — most dramatic from behind
+            var side = Game1.random.NextDouble() < 0.5 ? 1f : -1f;
+            idleImpulse = new Vector2(side * 0.50f, (Game1.random.NextSingle() - 0.5f) * 0.06f);
+        }
+        else if (animRoll < 0.47)
+        {
+            // Lean to one side: weight shift, slower wider arc
             var side = Game1.random.NextDouble() < 0.5 ? 1f : -1f;
             idleImpulse = new Vector2(side * 0.38f, (Game1.random.NextSingle() - 0.5f) * 0.08f);
         }
+        else if (animRoll < 0.59)
+        {
+            // Arm raise / stretch: strong upward then natural fall
+            idleImpulse = new Vector2(
+                (Game1.random.NextSingle() - 0.5f) * 0.15f,
+                -0.55f);
+        }
+        else if (animRoll < 0.70)
+        {
+            // Bounce: rhythmic downward weight shift, like tapping foot
+            idleImpulse = new Vector2(
+                (Game1.random.NextSingle() - 0.5f) * 0.06f,
+                0.40f);
+        }
         else if (animRoll < 0.80)
         {
-            // Arm raise: upward impulse followed by natural fall-back (gravity in decay)
-            idleImpulse = new Vector2(
-                (Game1.random.NextSingle() - 0.5f) * 0.12f,
-                -0.45f);
+            // Shimmy: two rapid alternating lateral pushes
+            var side = Game1.random.NextDouble() < 0.5 ? 1f : -1f;
+            idleImpulse = new Vector2(side * 0.60f, 0.08f);
         }
-        else if (animRoll < 0.93)
+        else if (animRoll < 0.90)
         {
-            // Breathing pulse: small up-down oscillation
+            // Deep breathing: slow oscillation in current phase
             idleImpulse = new Vector2(
                 (Game1.random.NextSingle() - 0.5f) * 0.05f,
-                (Game1.ticks / 30 % 2 == 0) ? -0.10f : 0.10f);
+                (Game1.ticks / 30 % 2 == 0) ? -0.14f : 0.14f);
         }
         else
         {
-            // Twirl: diagonal circular push (creates a brief rotating motion as it decays)
+            // Twirl: full diagonal circular push
             var angle = (float)(Game1.random.NextDouble() * Math.PI * 2.0);
-            idleImpulse = new Vector2((float)Math.Cos(angle), (float)Math.Sin(angle)) * 0.50f;
+            idleImpulse = new Vector2((float)Math.Cos(angle), (float)Math.Sin(angle)) * 0.58f;
         }
 
         this.bodyImpulse[key] = impulse + idleImpulse;
 
-        // Hair also reacts to idle arm movements (hair tosses with the body motion)
+        // Hair tosses with body motion
         if (this.config.EnableHairPhysics)
         {
             var hairImpulse = this.hairImpulse.TryGetValue(key, out var hi) ? hi : Vector2.Zero;
-            this.hairImpulse[key] = hairImpulse + idleImpulse * (this.config.HairStrength * 0.4f);
+            this.hairImpulse[key] = hairImpulse + idleImpulse * (this.config.HairStrength * 0.5f);
         }
     }
 
@@ -1366,12 +1473,60 @@ public sealed class ModEntry : Mod
             ? new Vector2(this.currentWindStrength * 0.04f * strength, 0f)
             : Vector2.Zero;
 
+        // Player always contributes to grass bend
         if (this.lastPositions.TryGetValue(this.GetCharacterKey(Game1.player), out var lastPos))
         {
             var playerVelocity = Game1.player.Position - lastPos;
             if (playerVelocity.LengthSquared() > 0.25f)
             {
                 this.grassBendVelocity += -playerVelocity * (0.012f * strength);
+            }
+        }
+
+        // All other humanoids (NPCs, pets) also push grass
+        if (this.config.EnableAllCreatureGrassCollision)
+        {
+            foreach (var character in this.EnumerateHumanoids(location))
+            {
+                if (character is Farmer)
+                {
+                    continue; // player already handled above
+                }
+
+                if (this.lastPositions.TryGetValue(this.GetCharacterKey(character), out var chLast))
+                {
+                    var chVel = character.Position - chLast;
+                    if (chVel.LengthSquared() > 0.25f)
+                    {
+                        this.grassBendVelocity += -chVel * (0.008f * strength);
+                    }
+                }
+            }
+
+            // Monsters push grass — proportional to movement speed; larger/faster = more bend
+            foreach (var monster in this.EnumerateMonsters(location))
+            {
+                if (this.lastPositions.TryGetValue(this.GetCharacterKey(monster), out var mLast))
+                {
+                    var mVel = monster.Position - mLast;
+                    if (mVel.LengthSquared() > 0.25f)
+                    {
+                        this.grassBendVelocity += -mVel * (0.007f * strength);
+                    }
+                }
+            }
+
+            // Farm animals push grass too
+            foreach (var animal in EnumerateFarmAnimals(location))
+            {
+                if (this.lastPositions.TryGetValue(this.GetCharacterKey(animal), out var aLast))
+                {
+                    var aVel = animal.Position - aLast;
+                    if (aVel.LengthSquared() > 0.25f)
+                    {
+                        this.grassBendVelocity += -aVel * (0.006f * strength);
+                    }
+                }
             }
         }
 
@@ -1384,6 +1539,154 @@ public sealed class ModEntry : Mod
         {
             this.grassBendDisplacement = Vector2.Normalize(this.grassBendDisplacement) * 3f;
         }
+    }
+
+    // ── Crop / weed / grass terrain collision ─────────────────────────────────
+
+    /// <summary>
+    /// Detects when any character (player, NPC, monster, farm animal) is walking through
+    /// grass, crops, or weed terrain features and applies a localized spring-force bend
+    /// to the global grassBendVelocity. All creatures have dynamic collision with vegetation.
+    ///
+    /// How it works:
+    ///   - Convert pixel position to tile coordinates (tile = pos / 64)
+    ///   - Check the 3×3 neighborhood of tiles around the character for:
+    ///       Grass terrain feature (wild grass patches)
+    ///       HoeDirt terrain feature (tilled/planted crop tiles)
+    ///       Objects whose name contains "Weed" or "Fiber" (wild weeds)
+    ///   - Each occupied tile adds a directional contribution to grassBendVelocity
+    ///     proportional to the character's movement speed
+    ///   - Ragdolling characters (speed > 3 px/tick) cause a large burst that models
+    ///     the whole body crashing through a field
+    ///
+    /// Compatible with all vanilla and mod-added terrain features.
+    /// </summary>
+    private void SimulateCropWeedCollision(GameLocation location)
+    {
+        if (!this.config.EnableCropWeedCollisionPhysics || !location.IsOutdoors)
+        {
+            return;
+        }
+
+        var str = this.config.CropWeedCollisionStrength;
+
+        // ── Player + humanoids ───────────────────────────────────────────────
+        foreach (var character in this.EnumerateHumanoids(location))
+        {
+            if (!this.lastPositions.TryGetValue(this.GetCharacterKey(character), out var lastP))
+            {
+                continue;
+            }
+
+            var vel = character.Position - lastP;
+            if (vel.LengthSquared() < 0.04f)
+            {
+                continue; // not moving — no collision
+            }
+
+            var isRagdolling = vel.LengthSquared() > 9f; // ~3 px/tick = ragdoll speed
+            this.ApplyCropCollisionImpulse(character.Position, vel, location, str, isRagdolling);
+        }
+
+        // ── Monsters ─────────────────────────────────────────────────────────
+        foreach (var monster in this.EnumerateMonsters(location))
+        {
+            if (!this.lastPositions.TryGetValue(this.GetCharacterKey(monster), out var lastM))
+            {
+                continue;
+            }
+
+            var vel = monster.Position - lastM;
+            if (vel.LengthSquared() < 0.04f)
+            {
+                continue;
+            }
+
+            var isRagdolling = vel.LengthSquared() > 9f;
+            this.ApplyCropCollisionImpulse(monster.Position, vel, location, str * 0.75f, isRagdolling);
+        }
+
+        // ── Farm animals ─────────────────────────────────────────────────────
+        foreach (var animal in EnumerateFarmAnimals(location))
+        {
+            if (!this.lastPositions.TryGetValue(this.GetCharacterKey(animal), out var lastA))
+            {
+                continue;
+            }
+
+            var vel = animal.Position - lastA;
+            if (vel.LengthSquared() < 0.04f)
+            {
+                continue;
+            }
+
+            this.ApplyCropCollisionImpulse(animal.Position, vel, location, str * 0.55f, isRagdolling: false);
+        }
+    }
+
+    /// <summary>
+    /// Checks the 3×3 tile neighborhood around <paramref name="pixelPos"/> for vegetation
+    /// terrain features/objects and contributes a bend impulse to grassBendVelocity.
+    /// </summary>
+    private void ApplyCropCollisionImpulse(Vector2 pixelPos, Vector2 vel, GameLocation location, float strength, bool isRagdolling)
+    {
+        var tileX = (int)(pixelPos.X / 64f);
+        var tileY = (int)(pixelPos.Y / 64f);
+
+        var movDir = vel.LengthSquared() > 0.001f ? Vector2.Normalize(vel) : Vector2.Zero;
+        if (float.IsNaN(movDir.X) || float.IsNaN(movDir.Y))
+        {
+            return;
+        }
+
+        int hits = 0;
+
+        for (int dx = -1; dx <= 1; dx++)
+        {
+            for (int dy = -1; dy <= 1; dy++)
+            {
+                var tile = new Vector2(tileX + dx, tileY + dy);
+
+                // Check terrain features: Grass and HoeDirt (crops)
+                if (location.terrainFeatures.TryGetValue(tile, out var feature))
+                {
+                    if (feature is Grass || feature is HoeDirt)
+                    {
+                        hits++;
+                    }
+                }
+
+                // Check placed objects that are weeds/fiber
+                if (location.objects.TryGetValue(tile, out var obj) && obj is not null)
+                {
+                    var objName = obj.Name ?? string.Empty;
+                    if (ContainsAny(objName, "Weed", "Fiber", "Wild", "Hay") ||
+                        obj.Category == StardewValley.Object.wildResultCategory)
+                    {
+                        hits++;
+                    }
+                }
+            }
+        }
+
+        if (hits == 0)
+        {
+            return;
+        }
+
+        float impactScale;
+        if (isRagdolling)
+        {
+            // Heavy crash-through: body rolling through field at high speed
+            impactScale = 0.06f * strength * Math.Min(vel.Length() * 0.15f, 2.5f);
+        }
+        else
+        {
+            // Normal walk-through: gentle parting as feet brush past
+            impactScale = 0.015f * strength;
+        }
+
+        this.grassBendVelocity += movDir * (impactScale * hits);
     }
 
     /// <summary>
@@ -2193,6 +2496,24 @@ public sealed class ModEntry : Mod
             () => this.config.EnableWaterEmergenceHairDroop, v => this.config.EnableWaterEmergenceHairDroop = v,
             () => "Enable water emergence hair droop",
             () => "When the farmer exits the water, hair droops heavily for ~1.5 seconds as if soaking wet, then dries and returns to normal physics.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableDirectionalBodyBoost, v => this.config.EnableDirectionalBodyBoost = v,
+            () => "Enable directional body boost",
+            () => "Amplifies breast and butt jiggle based on facing direction. " +
+                  "Facing down (away from camera): breasts splay laterally at each step, butt gets stronger vertical bounce. " +
+                  "Facing up (toward camera): belly/front bounce amplified. " +
+                  "Works for player, NPCs, and all modded characters.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableCropWeedCollisionPhysics, v => this.config.EnableCropWeedCollisionPhysics = v,
+            () => "Enable crop/weed collision physics",
+            () => "Grass, crops, and weeds bend and part when any creature walks or rolls through them. " +
+                  "Ragdolling causes a large crashing-through burst. All creatures (NPCs, monsters, animals) included. " +
+                  "Compatible with all crop mods and custom terrain features.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableAllCreatureGrassCollision, v => this.config.EnableAllCreatureGrassCollision = v,
+            () => "All creatures push grass",
+            () => "NPCs, monsters, and farm animals also push and bend grass tiles when they move through them. " +
+                  "Adds dynamic grass response to the whole map, not just the player's path.");
 
         // ── Quick presets ─────────────────────────────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "Quick Presets");
@@ -2309,7 +2630,8 @@ public sealed class ModEntry : Mod
         // ── Environmental physics ─────────────────────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "Environmental Physics");
         api.AddParagraph(this.ModManifest, () =>
-            "Grass bends as you walk through it and gets flattened when ragdolled bodies crash through it. " +
+            "Grass bends as you and ALL creatures walk through it and gets flattened when ragdolled bodies crash through it. " +
+            "NPCs, monsters, and farm animals all dynamically push and bend grass tiles. " +
             "Tool swings disturb environment based on weight and shape: " +
             "pickaxe = heavy smash (rocks fly short but may roll being round), " +
             "scythe = wide light sweep (sticks tumble), sword = lateral knock. " +
@@ -2318,6 +2640,35 @@ public sealed class ModEntry : Mod
             () => this.config.EnvironmentalPhysicsStrength, v => this.config.EnvironmentalPhysicsStrength = v,
             () => "Environmental strength",
             () => "Intensity of grass bend, debris wobble, and rock roll physics. 0 = off, 2 = maximum.", 0f, 2f, 0.05f);
+
+        // ── Crop / weed collision ─────────────────────────────────────────────
+        api.AddSectionTitle(this.ModManifest, () => "Crop & Weed Collision");
+        api.AddParagraph(this.ModManifest, () =>
+            "Grass terrain features, planted crops (HoeDirt), and wild weed objects all respond dynamically when " +
+            "any character walks or rolls through them. " +
+            "Normal walking: gentle parting as feet brush past. " +
+            "Ragdolling at high speed: heavy body-crash burst that flattens a wide area. " +
+            "Works for all creatures: player, NPCs, monsters, farm animals. " +
+            "Compatible with all crop mods and custom terrain features via name matching.");
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.CropWeedCollisionStrength, v => this.config.CropWeedCollisionStrength = v,
+            () => "Crop/weed collision strength",
+            () => "How much vegetation bends when walked through or ragdolled into. 0 = off, 2 = very dramatic.", 0f, 2f, 0.05f);
+
+        // ── Idle motion frequency ─────────────────────────────────────────────
+        api.AddSectionTitle(this.ModManifest, () => "Idle Motion Frequency");
+        api.AddParagraph(this.ModManifest, () =>
+            "Controls how often idle physics bursts fire when standing still. " +
+            "A built-in breathing pulse fires every 45 ticks (~0.75 s) regardless of this setting — " +
+            "it keeps body and hair gently alive at all times. " +
+            "The main idle burst (hip sway, shimmy, arm-raise, bounce, twirl, etc.) fires at the interval below.");
+        api.AddNumberOption(this.ModManifest,
+            () => (float)this.config.IdleMotionIntervalTicks,
+            v => this.config.IdleMotionIntervalTicks = Math.Max(30, (int)v),
+            () => "Idle burst interval (ticks)",
+            () => "Ticks between major idle physics events. 90 = ~1.5 s (default), 30 = very frequent, 240 = infrequent. " +
+                  "The breathing pulse is always active and unaffected by this setting.",
+            30f, 300f, 15f);
 
         // ── Debris & item physics ─────────────────────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "Debris & Item Physics");

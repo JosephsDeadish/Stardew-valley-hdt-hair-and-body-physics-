@@ -30,6 +30,12 @@ public sealed class ModConfig
     public bool EnableMagicCastPhysics { get; set; } = true;
     /// <summary>Brief celebration body bounce + hair toss when the farmer gains a skill level (works with SpaceCore custom skills too).</summary>
     public bool EnableSkillLevelUpBounce { get; set; } = true;
+    /// <summary>Boosts breast lateral splay and butt jiggle when the character is facing down (away from camera). Most visible from behind.</summary>
+    public bool EnableDirectionalBodyBoost { get; set; } = true;
+    /// <summary>Grass, crops, and weeds bend and part when any character or monster walks or rolls through them. All creatures have dynamic collision with terrain features.</summary>
+    public bool EnableCropWeedCollisionPhysics { get; set; } = true;
+    /// <summary>All NPCs, monsters, and farm animals contribute to dynamic grass bending (not just the player).</summary>
+    public bool EnableAllCreatureGrassCollision { get; set; } = true;
 
     // ── Feminine body strengths ───────────────────────────────────────────────
     public float FemaleBreastStrength { get; set; } = 0.75f;
@@ -78,6 +84,17 @@ public sealed class ModConfig
     // ── Magic cast physics ────────────────────────────────────────────────────
     /// <summary>Intensity of body/hair impulse when casting a spell or using a magic tool. Higher values = more dramatic hair fly and body reaction.</summary>
     public float MagicCastImpulseStrength { get; set; } = 1.0f;
+
+    // ── Crop/weed collision ───────────────────────────────────────────────────
+    /// <summary>How strongly grass, crops, and weeds bend and part when walked through or ragdolled into.</summary>
+    public float CropWeedCollisionStrength { get; set; } = 0.65f;
+
+    // ── Idle motion ───────────────────────────────────────────────────────────
+    /// <summary>
+    /// Ticks between idle physics bursts (body sways, leans, stretches). Default 90 = ~1.5 seconds.
+    /// Lower values = physics visible more often. Minimum recommended: 30.
+    /// </summary>
+    public int IdleMotionIntervalTicks { get; set; } = 90;
 
     // ── Presets ───────────────────────────────────────────────────────────────
     public string Preset { get; set; } = "Default";
