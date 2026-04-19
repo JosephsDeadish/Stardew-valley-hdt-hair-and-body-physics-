@@ -138,7 +138,12 @@ jobs:
           unzip -q /tmp/smapi.zip -d /tmp/smapi
 
           # Copy SMAPI runtime DLLs into the game folder so the build can reference them
-          SMAPI_DLL=$(find /tmp/smapi -name "StardewModdingAPI.dll" -type f | head -1)
+          # The SMAPI installer zip nests DLLs under internal/linux/ — search there first
+          SMAPI_DLL=$(find /tmp/smapi -path "*/internal/linux/*" -name "StardewModdingAPI.dll" -type f | head -1)
+          # Fall back to any location in case the archive layout changes again
+          if [ -z "$SMAPI_DLL" ]; then
+            SMAPI_DLL=$(find /tmp/smapi -name "StardewModdingAPI.dll" -type f | head -1)
+          fi
 
           if [ -z "$SMAPI_DLL" ]; then
             echo "ERROR: StardewModdingAPI.dll not found in SMAPI release"
