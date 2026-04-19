@@ -19,6 +19,7 @@ public sealed class ModEntry : Mod
     private readonly Dictionary<int, NpcKnockdownState> farmAnimalKnockdown = new();
     private readonly List<PhysicsPreset> presets = new();
     private readonly List<MonsterArchetypeRule> monsterArchetypeRules = new();
+    private readonly List<DebrisWeightRule> debrisWeightRules = new();
 
     // ── Environmental physics state ───────────────────────────────────────────
     private Vector2 grassBendDisplacement = Vector2.Zero;
@@ -179,6 +180,12 @@ public sealed class ModEntry : Mod
         {
             this.SimulateEnvironmental(location);
         }
+
+        // ── Floating debris physics (every 3rd tick for performance)
+        if (this.config.EnableDebrisPhysics && e.IsMultipleOf(3))
+        {
+            this.SimulateDebrisPhysics(location);
+        }
     }
 
     private void OnButtonPressed(object? sender, ButtonPressedEventArgs e)
@@ -227,6 +234,12 @@ public sealed class ModEntry : Mod
         {
             this.ApplyToolSwingToEnvironment(Game1.player.CurrentTool, Game1.player);
         }
+
+        // Tool/weapon kick nearby floating debris based on weight class
+        if (this.config.EnableDebrisPhysics)
+        {
+            this.ApplyToolSwingToFloatingDebris(Game1.player.CurrentTool, Game1.player);
+        }
     }
 
     // ── State helpers ─────────────────────────────────────────────────────────
@@ -254,6 +267,10 @@ public sealed class ModEntry : Mod
         this.monsterArchetypeRules.AddRange(
             helper.Data.ReadJsonFile<List<MonsterArchetypeRule>>("assets/monsterArchetypes.json")
             ?? new List<MonsterArchetypeRule>());
+        this.debrisWeightRules.Clear();
+        this.debrisWeightRules.AddRange(
+            helper.Data.ReadJsonFile<List<DebrisWeightRule>>("assets/debrisPhysics.json")
+            ?? new List<DebrisWeightRule>());
         this.detector = new SpriteProfileDetector(profiles);
         this.detector.SetConfigOverrides(this.config.GenderOverrides);
     }
@@ -613,9 +630,23 @@ public sealed class ModEntry : Mod
             }
         }
 
+        // If still no direction found AND player is outdoors → treat as explosion:
+        // push radially outward from the player's position (blast wave from all sides).
         if (attackDir.LengthSquared() < 0.001f)
         {
-            return;
+            if (Game1.currentLocation?.IsOutdoors == true)
+            {
+                // Radial outward push — random direction, simulating concussive blast wave
+                var blastAngle = (float)(Game1.random.NextDouble() * Math.PI * 2.0);
+                attackDir = new Vector2((float)Math.Cos(blastAngle), (float)Math.Sin(blastAngle));
+            }
+            else
+            {
+                // Indoors: trap/floor hazard — use a random small bump
+                attackDir = new Vector2(
+                    (Game1.random.NextSingle() - 0.5f) * 2f,
+                    (Game1.random.NextSingle() - 0.5f) * 2f);
+            }
         }
 
         attackDir = Vector2.Normalize(attackDir);
@@ -927,11 +958,53 @@ public sealed class ModEntry : Mod
 
         var key = this.GetCharacterKey(character);
         var impulse = this.bodyImpulse.TryGetValue(key, out var existing) ? existing : Vector2.Zero;
-        var randomWave = new Vector2(
-            Game1.random.NextSingle() - 0.5f,
-            Game1.random.NextSingle() - 0.5f) * 0.24f;
 
-        this.bodyImpulse[key] = impulse + randomWave;
+        // Pick a varied idle animation type to keep NPCs looking lively
+        // Weighted: wave is most common, followed by lean and arm-raise, twirl is rare
+        var animRoll = Game1.random.NextDouble();
+        Vector2 idleImpulse;
+        if (animRoll < 0.40)
+        {
+            // Standard body sway (original behavior)
+            idleImpulse = new Vector2(
+                Game1.random.NextSingle() - 0.5f,
+                Game1.random.NextSingle() - 0.5f) * 0.24f;
+        }
+        else if (animRoll < 0.62)
+        {
+            // Lean to one side: strong lateral push, minor vertical
+            var side = Game1.random.NextDouble() < 0.5 ? 1f : -1f;
+            idleImpulse = new Vector2(side * 0.38f, (Game1.random.NextSingle() - 0.5f) * 0.08f);
+        }
+        else if (animRoll < 0.80)
+        {
+            // Arm raise: upward impulse followed by natural fall-back (gravity in decay)
+            idleImpulse = new Vector2(
+                (Game1.random.NextSingle() - 0.5f) * 0.12f,
+                -0.45f);
+        }
+        else if (animRoll < 0.93)
+        {
+            // Breathing pulse: small up-down oscillation
+            idleImpulse = new Vector2(
+                (Game1.random.NextSingle() - 0.5f) * 0.05f,
+                (Game1.ticks / 30 % 2 == 0) ? -0.10f : 0.10f);
+        }
+        else
+        {
+            // Twirl: diagonal circular push (creates a brief rotating motion as it decays)
+            var angle = (float)(Game1.random.NextDouble() * Math.PI * 2.0);
+            idleImpulse = new Vector2((float)Math.Cos(angle), (float)Math.Sin(angle)) * 0.50f;
+        }
+
+        this.bodyImpulse[key] = impulse + idleImpulse;
+
+        // Hair also reacts to idle arm movements (hair tosses with the body motion)
+        if (this.config.EnableHairPhysics)
+        {
+            var hairImpulse = this.hairImpulse.TryGetValue(key, out var hi) ? hi : Vector2.Zero;
+            this.hairImpulse[key] = hairImpulse + idleImpulse * (this.config.HairStrength * 0.4f);
+        }
     }
 
     // ── Ragdoll ───────────────────────────────────────────────────────────────
@@ -1189,6 +1262,207 @@ public sealed class ModEntry : Mod
         this.grassBendVelocity += swingDir * (impulseScale * strength);
     }
 
+    // ── Debris physics ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Applies gentle walk-through physics to nearby floating Debris objects each tick.
+    /// Light items (fiber, weeds, seeds) scatter easily. Heavy items (stones, ore) resist.
+    /// Simulates debris tumbling and bouncing as the player or NPCs move through them.
+    /// Compatible with all custom items — uses keyword matching from debrisPhysics.json.
+    /// </summary>
+    private void SimulateDebrisPhysics(GameLocation location)
+    {
+        if (Game1.player is null)
+        {
+            return;
+        }
+
+        var strength = this.config.DebrisPhysicsStrength;
+        var playerPos = Game1.player.Position;
+
+        Vector2 playerVelocity = Vector2.Zero;
+        if (this.lastPositions.TryGetValue(this.GetCharacterKey(Game1.player), out var lastPos))
+        {
+            playerVelocity = Game1.player.Position - lastPos;
+        }
+
+        foreach (var debris in location.debris)
+        {
+            if (debris?.Chunks is null || debris.Chunks.Count == 0)
+            {
+                continue;
+            }
+
+            var chunkPos = new Vector2(debris.Chunks[0].position.X, debris.Chunks[0].position.Y);
+            var dist = Vector2.Distance(chunkPos, playerPos);
+            if (dist > 96f || dist < 0.001f)
+            {
+                continue;
+            }
+
+            var weightClass = this.ResolveDebrisWeightClass(debris);
+            var (impulseScale, drag) = weightClass switch
+            {
+                DebrisWeightClass.Light  => (0.55f, 0.88f),
+                DebrisWeightClass.Medium => (0.30f, 0.92f),
+                DebrisWeightClass.Heavy  => (0.14f, 0.95f),
+                _ => (0.30f, 0.92f)
+            };
+
+            // Walking through debris pushes it in the movement direction
+            if (playerVelocity.LengthSquared() > 0.01f)
+            {
+                var pushDir = Vector2.Normalize(playerVelocity);
+                if (!float.IsNaN(pushDir.X) && !float.IsNaN(pushDir.Y))
+                {
+                    debris.velocity += pushDir * (impulseScale * strength);
+                }
+            }
+
+            // Apply drag so debris eventually settles
+            debris.velocity *= drag;
+        }
+    }
+
+    /// <summary>
+    /// Tool and weapon swings kick nearby floating Debris away.
+    /// Scale and direction depend on tool type and debris weight class:
+    ///   Pickaxe = heavy smash, rocks fly short but fast
+    ///   Scythe  = wide sweep launches light debris (fiber, weeds) in a wide arc
+    ///   Axe     = lateral chop sends wood chips sideways
+    ///   Sword   = medium lateral knock for gems and mixed debris
+    /// Roll physics based on weight: heavy items have more inertia and travel less far.
+    /// Compatible with all modded weapons — matches by tool type, not name.
+    /// </summary>
+    private void ApplyToolSwingToFloatingDebris(Tool? tool, Farmer player)
+    {
+        if (tool is null || Game1.currentLocation is null)
+        {
+            return;
+        }
+
+        var strength = this.config.DebrisPhysicsStrength;
+
+        float range = tool switch
+        {
+            Pickaxe     => 48f,
+            Axe         => 56f,
+            MeleeWeapon mw when mw.Name.Contains("Scythe", StringComparison.OrdinalIgnoreCase) => 80f,
+            MeleeWeapon => 64f,
+            Hoe         => 40f,
+            _           => 32f
+        };
+
+        var swingDir = player.FacingDirection switch
+        {
+            0 => new Vector2(0f, -1f),
+            1 => new Vector2(1f, 0f),
+            2 => new Vector2(0f, 1f),
+            3 => new Vector2(-1f, 0f),
+            _ => Vector2.Zero
+        };
+
+        if (swingDir == Vector2.Zero)
+        {
+            return;
+        }
+
+        foreach (var debris in Game1.currentLocation.debris)
+        {
+            if (debris?.Chunks is null || debris.Chunks.Count == 0)
+            {
+                continue;
+            }
+
+            var chunkPos = new Vector2(debris.Chunks[0].position.X, debris.Chunks[0].position.Y);
+            var dist = Vector2.Distance(chunkPos, player.Position);
+            if (dist > range)
+            {
+                continue;
+            }
+
+            var weightClass = this.ResolveDebrisWeightClass(debris);
+            var kickStrength = weightClass switch
+            {
+                DebrisWeightClass.Light  => 2.5f,
+                DebrisWeightClass.Medium => 1.4f,
+                DebrisWeightClass.Heavy  => 0.7f,
+                _ => 1.4f
+            };
+
+            var toolMultiplier = tool switch
+            {
+                Pickaxe     => 1.8f,
+                Axe         => 1.5f,
+                MeleeWeapon mw when mw.Name.Contains("Scythe", StringComparison.OrdinalIgnoreCase) => 1.3f,
+                MeleeWeapon => 1.1f,
+                _           => 0.8f
+            };
+
+            // Lateral spread gives each debris chunk a slightly different trajectory
+            var lateral = new Vector2(-swingDir.Y, swingDir.X);
+            var isScythe = tool is MeleeWeapon sw && sw.Name.Contains("Scythe", StringComparison.OrdinalIgnoreCase);
+            var spread = (Game1.random.NextSingle() - 0.5f) * (isScythe ? 1.2f : 0.6f);
+            var kickDir = swingDir + lateral * spread;
+            if (kickDir.LengthSquared() < 0.001f)
+            {
+                continue;
+            }
+
+            kickDir = Vector2.Normalize(kickDir);
+            if (float.IsNaN(kickDir.X) || float.IsNaN(kickDir.Y))
+            {
+                continue;
+            }
+
+            debris.velocity += kickDir * (kickStrength * toolMultiplier * strength);
+        }
+    }
+
+    /// <summary>
+    /// Resolves the weight class for a Debris object by matching its item name/ID against
+    /// the rules in assets/debrisPhysics.json. Falls back to Medium for unknown items.
+    /// Allows mod-added minerals, gems, and custom debris to get appropriate physics.
+    /// </summary>
+    private DebrisWeightClass ResolveDebrisWeightClass(Debris debris)
+    {
+        var itemName = debris.item?.Name ?? string.Empty;
+
+        // Try item ID match first (fastest, most precise)
+        if (!string.IsNullOrEmpty(debris.item?.ItemId))
+        {
+            foreach (var rule in this.debrisWeightRules)
+            {
+                if (!string.IsNullOrEmpty(rule.ItemId)
+                    && debris.item.ItemId.Equals(rule.ItemId, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (Enum.TryParse<DebrisWeightClass>(rule.WeightClass, ignoreCase: true, out var byId))
+                    {
+                        return byId;
+                    }
+                }
+            }
+        }
+
+        // Then try name keyword match
+        if (!string.IsNullOrEmpty(itemName))
+        {
+            foreach (var rule in this.debrisWeightRules)
+            {
+                if (!string.IsNullOrEmpty(rule.ItemNameContains)
+                    && itemName.Contains(rule.ItemNameContains, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (Enum.TryParse<DebrisWeightClass>(rule.WeightClass, ignoreCase: true, out var byName))
+                    {
+                        return byName;
+                    }
+                }
+            }
+        }
+
+        return DebrisWeightClass.Medium;
+    }
+
     // ── GMCM registration ─────────────────────────────────────────────────────
 
     private void RegisterConfigMenu()
@@ -1273,10 +1547,16 @@ public sealed class ModEntry : Mod
             () => this.config.EnableHitstopEffect, v => this.config.EnableHitstopEffect = v,
             () => "Enable hitstop effect",
             () => "Brief physics freeze (~3–6 ticks) on significant hits for impact feedback. Scales with damage dealt.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableDebrisPhysics, v => this.config.EnableDebrisPhysics = v,
+            () => "Enable debris physics",
+            () => "Floating debris (rocks, wood, gems, fiber, etc.) scatter and bounce when walked through or hit. " +
+                  "Weight class from debrisPhysics.json: light items fly far, heavy stones barely budge. " +
+                  "Compatible with all custom item and mineral mods.");
 
         // ── Quick presets ─────────────────────────────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "Quick Presets");
-        api.AddParagraph(this.ModManifest, () => "Presets set all physics strengths at once. Options: Soft, Default, High.");
+        api.AddParagraph(this.ModManifest, () => "Presets set all physics strengths at once. Options: Soft, Default, High, ExtraBouncy.");
         api.AddTextOption(
             this.ModManifest,
             () => this.config.Preset,
@@ -1398,6 +1678,18 @@ public sealed class ModEntry : Mod
             () => this.config.EnvironmentalPhysicsStrength, v => this.config.EnvironmentalPhysicsStrength = v,
             () => "Environmental strength",
             () => "Intensity of grass bend, debris wobble, and rock roll physics. 0 = off, 2 = maximum.", 0f, 2f, 0.05f);
+
+        // ── Debris & item physics ─────────────────────────────────────────────
+        api.AddSectionTitle(this.ModManifest, () => "Debris & Item Physics");
+        api.AddParagraph(this.ModManifest, () =>
+            "Floating resource debris (rocks, wood chips, gems, fiber, seeds, etc.) bounce and scatter when walked through or hit. " +
+            "Weight class is determined by item name/ID using debrisPhysics.json — add entries to support any custom mod items. " +
+            "Light items (fiber, weeds) fly far; heavy stones barely budge. " +
+            "Pickaxe concentrates force for rocks; scythe sweeps light debris in a wide arc; sword knocks gems and mixed items sideways.");
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.DebrisPhysicsStrength, v => this.config.DebrisPhysicsStrength = v,
+            () => "Debris physics strength",
+            () => "How forcefully debris scatters when walked through or hit. 0 = off, 2 = maximum.", 0f, 2f, 0.05f);
 
         // ── Gender overrides ──────────────────────────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "Gender Overrides");

@@ -17,6 +17,7 @@ public sealed class ModConfig
     public bool EnableHitDirectionalImpulse { get; set; } = true;
     public bool EnableClothingPhysicsModifier { get; set; } = true;
     public bool EnableHitstopEffect { get; set; } = true;
+    public bool EnableDebrisPhysics { get; set; } = true;
 
     // ── Feminine body strengths ───────────────────────────────────────────────
     public float FemaleBreastStrength { get; set; } = 0.75f;
@@ -54,6 +55,9 @@ public sealed class ModConfig
 
     // ── Environmental physics ─────────────────────────────────────────────────
     public float EnvironmentalPhysicsStrength { get; set; } = 0.5f;
+
+    // ── Debris physics ────────────────────────────────────────────────────────
+    public float DebrisPhysicsStrength { get; set; } = 0.65f;
 
     // ── Presets ───────────────────────────────────────────────────────────────
     public string Preset { get; set; } = "Default";
