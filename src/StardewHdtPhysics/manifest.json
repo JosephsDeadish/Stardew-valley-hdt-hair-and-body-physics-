@@ -1,8 +1,8 @@
 {
-  "Name": "Stardew HDT Physics",
+  "Name": "SVP Collisions, Physics, and Hit Stops",
   "Author": "JosephsDeadish",
-  "Version": "0.1.0",
-  "Description": "Zero-requirement plug-and-play physics mod: body jiggle, HDT hair (wind/rain/snow), idle motion, ragdoll, per-archetype monster physics (slime/bat/worm/bug/furry/skeleton), farm animal physics, NPC/pet sword knockdown, environmental grass+item collision physics. Works with LewdEW, Valley Girls, XTardew, HornyFur, Anthro, Fashion Sense, Creatures and Cuties, Pokémon mods, and all custom sprite/hair/creature/animal mods.",
+  "Version": "0.2.0",
+  "Description": "SVP Collisions, Physics, and Hit Stops — plug-and-play physics mod: body jiggle with directional boost, HDT hair (wind/rain/snow/micro-oscillation), idle motion, ragdoll, hitstop visual flash, per-archetype monster physics, farm animal physics, NPC/pet sword knockdown, environmental grass+item collision, crop/weed terrain collision for all creatures. Works with LewdEW, Valley Girls, XTardew, HornyFur, Fashion Sense, Creatures and Cuties, and all custom sprite/hair/creature mods.",
   "UniqueID": "JosephsDeadish.StardewHdtPhysics",
   "EntryDll": "StardewHdtPhysics.dll",
   "MinimumApiVersion": "4.0.0",

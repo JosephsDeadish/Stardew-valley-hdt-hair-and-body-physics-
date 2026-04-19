@@ -26,6 +26,11 @@ public sealed class ModEntry : Mod
     private Vector2 grassBendDisplacement = Vector2.Zero;
     private Vector2 grassBendVelocity = Vector2.Zero;
 
+    // ── Visual render wobble (applied during RenderingWorld, restored after) ──
+    private readonly Dictionary<Character, Vector2> savedPhysicsPositions = new();
+    private const float PhysicsVisualScale = 10f;  // px multiplier: impulse 0.4 → 4 px wobble
+    private const float PhysicsVisualMaxPx  = 10f; // hard cap so characters never teleport
+
     // ── Wind / weather ────────────────────────────────────────────────────────
     private float currentWindStrength = 0f;
     private float currentRainStrength = 0f;
@@ -88,12 +93,15 @@ public sealed class ModEntry : Mod
             this.Monitor.Log("SpaceCore detected — custom skill level-up physics enabled.", LogLevel.Info);
         }
 
-        this.RegisterConfigMenu();
+        // GMCM registration happens in OnGameLaunched (after all mods have loaded) for correct API availability
 
         helper.Events.GameLoop.UpdateTicked += this.OnUpdateTicked;
         helper.Events.GameLoop.SaveLoaded += this.OnSaveLoaded;
         helper.Events.GameLoop.DayStarted += this.OnDayStarted;
+        helper.Events.GameLoop.GameLaunched += this.OnGameLaunched;
         helper.Events.Input.ButtonPressed += this.OnButtonPressed;
+        helper.Events.Display.RenderingWorld += this.OnRenderingWorld;
+        helper.Events.Display.RenderedWorld += this.OnRenderedWorld;
     }
 
     // ── Event handlers ────────────────────────────────────────────────────────
@@ -104,11 +112,78 @@ public sealed class ModEntry : Mod
         this.config = this.Helper.ReadConfig<ModConfig>();
         this.detector.SetConfigOverrides(this.config.GenderOverrides);
         this.UpdateWindStrength();
+
+        // Show in-game HUD message so the player knows the mod is active
+        Game1.addHUDMessage(new HUDMessage("SVP Collisions, Physics, and Hit Stops — active", HUDMessage.achievement_type));
     }
 
     private void OnDayStarted(object? sender, DayStartedEventArgs e)
     {
         this.UpdateWindStrength();
+    }
+
+    private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
+    {
+        this.Monitor.Log("SVP Collisions, Physics, and Hit Stops — successfully initialized.", LogLevel.Info);
+        // Re-register GMCM now that all mods have loaded so the page picks up the correct name.
+        this.RegisterConfigMenu();
+    }
+
+    /// <summary>
+    /// Before the world is drawn: apply a scaled bodyImpulse as a temporary visual position offset
+    /// so the character sprite physically wobbles/jiggles on screen. The offset is capped to
+    /// PhysicsVisualMaxPx pixels so characters never visibly teleport.
+    /// </summary>
+    private void OnRenderingWorld(object? sender, RenderingWorldEventArgs e)
+    {
+        if (!Context.IsWorldReady || !this.config.EnableBodyPhysics || Game1.currentLocation is null)
+        {
+            return;
+        }
+
+        this.savedPhysicsPositions.Clear();
+
+        foreach (var character in this.EnumerateHumanoids(Game1.currentLocation))
+        {
+            var key = this.GetCharacterKey(character);
+            if (!this.bodyImpulse.TryGetValue(key, out var impulse))
+            {
+                continue;
+            }
+
+            var mag = impulse.Length();
+            if (mag < 0.015f) // ignore negligible micro-impulses
+            {
+                continue;
+            }
+
+            // Scale up to screen-pixel range, then clamp
+            var visualOffset = new Vector2(
+                Math.Clamp(impulse.X * PhysicsVisualScale, -PhysicsVisualMaxPx, PhysicsVisualMaxPx),
+                Math.Clamp(impulse.Y * PhysicsVisualScale, -PhysicsVisualMaxPx, PhysicsVisualMaxPx));
+
+            this.savedPhysicsPositions[character] = character.Position;
+            character.Position += visualOffset;
+        }
+    }
+
+    /// <summary>
+    /// After the world is drawn: restore all character positions so the visual offset
+    /// does not affect game logic (collision, pathfinding, proximity checks, etc.).
+    /// </summary>
+    private void OnRenderedWorld(object? sender, RenderedWorldEventArgs e)
+    {
+        if (this.savedPhysicsPositions.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var kv in this.savedPhysicsPositions)
+        {
+            kv.Key.Position = kv.Value;
+        }
+
+        this.savedPhysicsPositions.Clear();
     }
 
     private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
@@ -302,8 +377,41 @@ public sealed class ModEntry : Mod
         }
 
         var playerKey = this.GetCharacterKey(Game1.player);
-        this.bodyImpulse[playerKey] = Vector2.Zero;
-        this.hairImpulse[playerKey] = Vector2.Zero;
+
+        // Tool use recoil: body recoils backward (opposite to facing direction) and hair swings forward.
+        // Heavier tools produce stronger recoil. Previously this block incorrectly zeroed out the impulse.
+        if (this.config.EnableBodyPhysics && Game1.player.CurrentTool is not null)
+        {
+            var recoilStrength = Game1.player.CurrentTool switch
+            {
+                Pickaxe     => 0.28f,
+                Axe         => 0.24f,
+                MeleeWeapon => 0.18f,
+                Hoe         => 0.12f,
+                _           => 0.10f
+            };
+
+            // Recoil direction = opposite of facing direction
+            var recoilDir = Game1.player.FacingDirection switch
+            {
+                0 => new Vector2(0f,  1f),   // facing up    → recoil downward
+                1 => new Vector2(-1f, 0f),   // facing right → recoil left
+                2 => new Vector2(0f, -1f),   // facing down  → recoil upward
+                3 => new Vector2(1f,  0f),   // facing left  → recoil right
+                _ => Vector2.Zero
+            };
+
+            var existing = this.bodyImpulse.TryGetValue(playerKey, out var bi) ? bi : Vector2.Zero;
+            this.bodyImpulse[playerKey] = existing + recoilDir * recoilStrength;
+
+            if (this.config.EnableHairPhysics)
+            {
+                // Hair swings forward (in facing direction) as the arm swings out
+                var hairSwingDir = -recoilDir;
+                var hairExisting = this.hairImpulse.TryGetValue(playerKey, out var hi) ? hi : Vector2.Zero;
+                this.hairImpulse[playerKey] = hairExisting + hairSwingDir * (recoilStrength * this.config.HairStrength * 0.7f);
+            }
+        }
 
         // NPC sword knockdown — harmless cosmetic knockback
         if (this.config.EnableNpcSwordKnockdown
@@ -885,6 +993,10 @@ public sealed class ModEntry : Mod
         if (this.config.EnableHitstopEffect && damageFactor > 0.3f)
         {
             this.hitstopTicksRemaining = Math.Clamp((int)(damageFactor * 4f), 1, 6);
+
+            // Visual hit flash: briefly lighten the screen to give impact feedback
+            // Game1.flashAlpha is a built-in Stardew screen-flash value (0 = none, 1 = full white)
+            Game1.flashAlpha = Math.Clamp(damageFactor * 0.35f, 0.1f, 0.55f);
         }
     }
 
@@ -2394,6 +2506,8 @@ public sealed class ModEntry : Mod
 
     // ── GMCM registration ─────────────────────────────────────────────────────
 
+    private bool gmcmRegistered = false;
+
     private void RegisterConfigMenu()
     {
         var api = this.Helper.ModRegistry.GetApi<IGenericModConfigMenuApi>("spacechase0.GenericModConfigMenu");
@@ -2402,16 +2516,22 @@ public sealed class ModEntry : Mod
             return;
         }
 
+        // Only register once — GameLaunched re-calls this, which is fine; the second call
+        // just re-registers and GMCM replaces the old registration with the new one.
+        this.gmcmRegistered = true;
+
         api.Register(
             this.ModManifest,
             reset: () =>
             {
                 this.config = new ModConfig();
+                this.LoadData(this.Helper);
                 this.detector.SetConfigOverrides(this.config.GenderOverrides);
                 this.UpdateWindStrength();
             },
             save: () =>
             {
+                this.ApplyPresetIfMatched();
                 this.Helper.WriteConfig(this.config);
                 this.detector.SetConfigOverrides(this.config.GenderOverrides);
                 this.UpdateWindStrength();
