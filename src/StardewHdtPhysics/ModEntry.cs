@@ -1,4 +1,5 @@
 using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework.Graphics;
 using System.Runtime.CompilerServices;
 using StardewModdingAPI;
 using StardewModdingAPI.Events;
@@ -68,6 +69,15 @@ public sealed class ModEntry : Mod
     // ── Tree fell detection ────────────────────────────────────────────────────
     /// Tile positions of trees present last tick — used to detect tree-fell events.
     private readonly HashSet<Point> prevTreeTiles = new();
+
+    // ── Typed physics debris particles ────────────────────────────────────────
+    /// Self-contained arcing debris particles: wood splinters, sawdust, stone chunks.
+    /// No extra content required — rendered as coloured pixel quads via SpriteBatch.
+    private readonly List<TypedPhysicsParticle> typedParticles = new();
+    private const int MaxTypedParticles = 300;
+
+    /// 1×1 white Texture2D for particle rendering (lazily created on first use).
+    private Texture2D? pixelTexture;
 
     // ── Hitstop ───────────────────────────────────────────────────────────────
     private int hitstopTicksRemaining = 0;
@@ -367,6 +377,12 @@ public sealed class ModEntry : Mod
         }
 
         this.savedPhysicsPositions.Clear();
+
+        // Draw typed physics debris particles on top of restored world geometry.
+        if (this.config.EnableTypedPhysicsDebris && this.typedParticles.Count > 0)
+        {
+            this.RenderTypedParticles(e.SpriteBatch);
+        }
     }
 
     /// <summary>
@@ -686,8 +702,14 @@ public sealed class ModEntry : Mod
             this.SimulateCropWeedCollision(location);
         }
 
-        // ── Tree-fell detection — spawn real debris + apply thud impulse (every 3 ticks)
-        if (this.config.EnableDebrisPhysics && e.IsMultipleOf(3))
+        // ── Typed physics debris particles — step every tick for smooth arcs
+        if (this.config.EnableTypedPhysicsDebris && this.typedParticles.Count > 0)
+        {
+            this.StepTypedParticles(location);
+        }
+
+        // ── Tree-fell detection — every 3 ticks (trees don't fall sub-tick)
+        if (this.config.EnableTypedPhysicsDebris && e.IsMultipleOf(3))
         {
             this.TryDetectTreeFell(location);
         }
@@ -850,6 +872,7 @@ public sealed class ModEntry : Mod
         this.wasBobberInAir = false;
         this.wasFishBiting = false;
         this.wasFishCaught = false;
+        this.typedParticles.Clear();
         this.prevTreeTiles.Clear();
     }
 
@@ -1568,11 +1591,12 @@ public sealed class ModEntry : Mod
                     }
                 }
 
-                // Spawn real stone/ore Debris objects — material-matched to what was struck
-                if (this.config.EnableDebrisPhysics)
+                // Spawn typed stone/ore debris particles — material-matched to what was struck
+                if (this.config.EnableTypedPhysicsDebris)
                 {
-                    var stoneType = (tool is Pickaxe) ? 2 : 2; // type 2 = grey stone debris
-                    this.SpawnActualDebris(playerPos, stoneType, 4 + Game1.random.Next(4), 1.5f);
+                    var stoneKind = (tool is Pickaxe) ? PhysicsParticleKind.StoneChunk : PhysicsParticleKind.OreChunk;
+                    this.SpawnTypedDebris(playerPos, stoneKind,               3 + Game1.random.Next(4), 1.5f);
+                    this.SpawnTypedDebris(playerPos, PhysicsParticleKind.Sawdust, 4 + Game1.random.Next(5), 0.7f);
                 }
             }
         }
