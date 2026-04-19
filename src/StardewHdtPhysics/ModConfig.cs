@@ -7,6 +7,23 @@ public sealed class ModConfig
     public bool EnableHairPhysics { get; set; } = true;
     public bool EnableRagdollKnockback { get; set; } = true;
     public bool EnableIdleMotion { get; set; } = true;
+    /// <summary>
+    /// Modulate idle amplitude and frequency based on the character's current state
+    /// (Relaxed / Alert / Tired / Sleeping / Curious / Energetic).
+    /// When off, the Relaxed profile is always used.
+    /// </summary>
+    public bool EnableIdleStateProfiles { get; set; } = true;
+    /// <summary>
+    /// Fire scheduled one-shot idle events (ear twitches, tail flicks, head shakes,
+    /// wing rustles, blink-dips, etc.) in addition to the continuous idle loop.
+    /// These break up the repeating feel and make characters look alive.
+    /// </summary>
+    public bool EnableIdleEvents { get; set; } = true;
+    /// <summary>
+    /// Global multiplier for how often idle events fire.
+    /// 1 = default, 2 = twice as frequent, 0.5 = half as frequent.
+    /// </summary>
+    public float IdleEventRate { get; set; } = 1.0f;
     public bool EnableMonsterBodyPhysics { get; set; } = true;
     public bool EnableMonsterRagdoll { get; set; } = true;
     public bool EnableNpcSwordKnockdown { get; set; } = true;

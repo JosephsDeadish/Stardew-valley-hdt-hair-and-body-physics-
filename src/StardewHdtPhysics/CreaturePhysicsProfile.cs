@@ -142,6 +142,21 @@ public sealed class CreaturePhysicsProfile
     /// <summary>Per-tick amplitude of idle ear/snout/appendage micro-motion.</summary>
     public float IdleAppendageAmplitude { get; set; } = 0.006f;
 
+    /// <summary>Idle amplitude scale when in the Relaxed state (default = 1.0).</summary>
+    public float IdleRelaxedScale { get; set; } = 1.0f;
+
+    /// <summary>Idle amplitude scale when in the Alert state (combat-ready, smaller by default).</summary>
+    public float IdleAlertScale { get; set; } = 0.55f;
+
+    /// <summary>Idle amplitude scale when Tired (low health / stamina).</summary>
+    public float IdleTiredScale { get; set; } = 0.60f;
+
+    /// <summary>Event rate multiplier when in Relaxed state.</summary>
+    public float IdleRelaxedEventRate { get; set; } = 1.0f;
+
+    /// <summary>Event rate multiplier when in Alert state (more twitchy).</summary>
+    public float IdleAlertEventRate { get; set; } = 1.6f;
+
     // ── Spring tuning ─────────────────────────────────────────────────────────
 
     /// <summary>Multiplies the configured stiffness for all chains on this species.</summary>

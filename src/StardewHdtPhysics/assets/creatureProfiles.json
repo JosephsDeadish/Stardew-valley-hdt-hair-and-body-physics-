@@ -17,17 +17,25 @@
 //                  ThresholdNoiseX, ThresholdNoiseY, HasTailChain, HasWings,
 //                  HasFurChain, HasEarBones, TailSegments, FurSegments,
 //                  HitBoneImpulseMult, HitTailFollowMult, HitWingFollowMult,
-//                  HitFurFollowMult, HitHairFollowMult, IdleBodyAmplitude,
-//                  IdleAppendageAmplitude, StiffnessMult, DampingMult
+//                  HitFurFollowMult, HitHairFollowMult,
+//                  IdleBodyAmplitude, IdleAppendageAmplitude,
+//                  IdleRelaxedScale, IdleAlertScale, IdleTiredScale,
+//                  IdleRelaxedEventRate, IdleAlertEventRate,
+//                  StiffnessMult, DampingMult
+//
+// Idle state scales control how much the creature moves during each behavioural
+// state: IdleRelaxedScale=1.0 (default), IdleAlertScale=0.55 (stiffer/smaller
+// when combat-ready), IdleTiredScale=0.60 (slower when exhausted).
 //
 // Buggy Bugs mod: all creatures whose name contains "Buggy" are already mapped
 // to the Insect archetype in monsterArchetypes.json.  Add specific overrides
 // below if you need finer control per species.
 //
-// Example — skittery Swamp Beetle with extra random noise:
+// Example — skittery Swamp Beetle with extra random noise and faster idle events:
 // { "NameContains": "Swamp Beetle", "Profile": {
 //     "Archetype": "Insect", "Label": "Swamp Beetle",
-//     "DecayRate": 0.74, "RandomNoiseX": 0.022, "RandomNoiseY": 0.014 } }
+//     "DecayRate": 0.74, "RandomNoiseX": 0.022, "RandomNoiseY": 0.014,
+//     "IdleAlertEventRate": 2.0 } }
 
 [
 ]

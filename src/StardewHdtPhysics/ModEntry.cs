@@ -108,6 +108,14 @@ public sealed class ModEntry : Mod
     // Different characters start at different offsets so they don't all do the same move.
     private readonly Dictionary<int, int> idleCycleStep = new();
 
+    // ── Idle state + event scheduling ─────────────────────────────────────────
+    /// <summary>Current detected idle state per character (Relaxed/Alert/Tired/…).</summary>
+    private readonly Dictionary<int, IdleState> idleStates = new();
+    /// <summary>Per-character event schedulers for one-shot idle twitches.</summary>
+    private readonly Dictionary<int, IdleEventScheduler> idleEventSchedulers = new();
+    /// <summary>Tick on which the player last received a damage impulse (for Alert detection).</summary>
+    private int lastDamageTick = -1;
+
     // ── Optional mod integrations ─────────────────────────────────────────────
     private bool fashionSenseLoaded = false;
     private bool druidModLoaded = false;
@@ -227,6 +235,8 @@ public sealed class ModEntry : Mod
         this.Monitor.Log($"║  Bone stiffness:         {this.config.BoneStiffness:F2}  damping: {this.config.BoneDamping:F2}", LogLevel.Info);
         this.Monitor.Log($"║  Clothing flow physics:  {(this.config.EnableClothingFlowPhysics ? "ON " : "OFF")}", LogLevel.Info);
         this.Monitor.Log($"║  Idle motion:            {(this.config.EnableIdleMotion ? "ON " : "OFF")} (interval: {this.config.IdleMotionIntervalTicks} ticks)", LogLevel.Info);
+        this.Monitor.Log($"║  Idle state profiles:    {(this.config.EnableIdleStateProfiles ? "ON " : "OFF")}", LogLevel.Info);
+        this.Monitor.Log($"║  Idle events:            {(this.config.EnableIdleEvents ? "ON " : "OFF")} (rate: {this.config.IdleEventRate:F1}x)", LogLevel.Info);
         this.Monitor.Log($"║  Hitstop + hit flash:    {(this.config.EnableHitstopEffect ? "ON " : "OFF")}", LogLevel.Info);
         this.Monitor.Log($"║  Ragdoll knockback:      {(this.config.EnableRagdollKnockback ? "ON " : "OFF")}", LogLevel.Info);
         this.Monitor.Log($"║  Monster physics:        {(this.config.EnableMonsterBodyPhysics ? "ON " : "OFF")}", LogLevel.Info);
@@ -466,6 +476,10 @@ public sealed class ModEntry : Mod
 
         // Clear tree tracking so we don't false-trigger tree-fell events on arrival at new location.
         this.prevTreeTiles.Clear();
+
+        // Reset idle event scheduler on warp so events re-stagger from fresh offsets
+        if (this.idleEventSchedulers.TryGetValue(playerKey, out var sched))
+            sched.Reset();
     }
 
     private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
@@ -489,6 +503,7 @@ public sealed class ModEntry : Mod
             if (this.lastPlayerHealth >= 0 && hp < this.lastPlayerHealth)
             {
                 this.ApplyHitImpulse(Game1.player, this.lastPlayerHealth - hp);
+                this.lastDamageTick = Game1.ticks; // record for Alert idle state detection
             }
             this.lastPlayerHealth = hp;
         }
@@ -929,6 +944,10 @@ public sealed class ModEntry : Mod
         this.levelUpBounceTicksRemaining = 0;
         this.dragonRagdollCooldown.Clear();
         this.idleCycleStep.Clear();
+        this.idleStates.Clear();
+        foreach (var s in this.idleEventSchedulers.Values) s.Reset();
+        this.idleEventSchedulers.Clear();
+        this.lastDamageTick = -1;
         this.wasBobberInAir = false;
         this.wasFishBiting = false;
         this.wasFishCaught = false;
@@ -1006,6 +1025,8 @@ public sealed class ModEntry : Mod
         this.clothingImpulse.Remove(key);
         this.monsterBodyImpulse.Remove(key);
         this.idleCycleStep.Remove(key);
+        this.idleStates.Remove(key);
+        if (this.idleEventSchedulers.TryGetValue(key, out var sched)) { sched.Reset(); this.idleEventSchedulers.Remove(key); }
 
         if (this.boneGroups.TryGetValue(key, out var bg))   { bg.Reset();  this.boneGroups.Remove(key); }
         if (this.hairChains.TryGetValue(key, out var hc))   { hc.Reset();  this.hairChains.Remove(key); }
@@ -1522,6 +1543,70 @@ public sealed class ModEntry : Mod
                 idle = new Vector2(
                     (float)Math.Sin(t * 0.20f) * 0.020f,
                     (float)Math.Cos(t * 0.17f) * 0.020f) * strength;
+                break;
+
+            case MonsterPhysicsArchetype.Bird:
+                // Head bob every ~30 ticks + occasional wing rustle (lateral micro-flap)
+                idle = (t % 30 < 3)
+                    ? new Vector2(0f, 0.022f) * strength                        // peck/bob
+                    : Vector2.Zero;
+                if (t % 70 < 4) idle += new Vector2((Game1.random.NextSingle() - 0.5f) * 0.030f, -0.008f) * strength; // wing rustle
+                break;
+
+            case MonsterPhysicsArchetype.HeavyBeast:
+                // Heavy breathing Y-dominant + slow ear flick + occasional tail swish lateral
+                idle = new Vector2(0f, (float)Math.Sin(t * 0.05f) * 0.025f) * strength;
+                if (t % 90 < 6) idle += new Vector2((Game1.random.NextSingle() - 0.5f) * 0.040f, 0f) * strength; // ear/snout flick
+                break;
+
+            case MonsterPhysicsArchetype.Insect:
+                // High-frequency micro-oscillation (wing buzz) + antenna bob
+                idle = new Vector2(
+                    (Game1.random.NextSingle() - 0.5f) * 0.030f,
+                    (Game1.random.NextSingle() - 0.5f) * 0.020f) * strength;
+                if (t % 50 < 3) idle += new Vector2(0f, -0.012f) * strength; // antenna dip
+                break;
+
+            case MonsterPhysicsArchetype.FarmAnimalHeavy:
+                // Slow heavy breathing + tail swish + occasional head bob
+                idle = new Vector2((float)Math.Sin(t * 0.06f) * 0.012f, (float)Math.Sin(t * 0.04f) * 0.020f) * strength;
+                if (t % 100 < 7) idle += new Vector2(0f, 0.025f) * strength; // slow head dip
+                break;
+
+            case MonsterPhysicsArchetype.FarmAnimalLight:
+                // Quicker peck/hop pattern + ear twitch
+                idle = (t % 38 < 4)
+                    ? new Vector2(0f, 0.028f) * strength                        // peck
+                    : Vector2.Zero;
+                if (t % 60 < 3) idle += new Vector2((Game1.random.NextSingle() - 0.5f) * 0.030f, -0.006f) * strength; // ear twitch
+                break;
+
+            case MonsterPhysicsArchetype.PetDog:
+            {
+                // Tail wag burst + ear twitch + chest breathing
+                var dogPhase = (float)Math.Sin(t * 0.12f);
+                idle = new Vector2(dogPhase * 0.022f, 0f) * strength; // tail wag sway
+                if (t % 55 < 4) idle += new Vector2((Game1.random.NextSingle() - 0.5f) * 0.028f, -0.008f) * strength; // ear twitch
+                if (t % 45 < 3) idle += new Vector2(0f, -0.018f) * strength; // chest lift (breathing)
+                break;
+            }
+
+            case MonsterPhysicsArchetype.PetCat:
+            {
+                // Slow tail flick + loaf breathing + occasional ear twitch
+                var catPhase = (float)Math.Sin(t * 0.07f);
+                idle = new Vector2(catPhase * 0.014f, 0f) * strength; // slow tail sway
+                if (t % 50 < 3) idle += new Vector2(0f, (float)Math.Sin(t * 0.08f) * 0.015f) * strength; // loaf breathing
+                if (t % 75 < 3) idle += new Vector2((Game1.random.NextSingle() - 0.5f) * 0.025f, -0.007f) * strength; // ear twitch
+                break;
+            }
+
+            case MonsterPhysicsArchetype.FantasyFamiliar:
+                // Magical shimmering Lissajous + occasional wing flutter + curious head tilt
+                idle = new Vector2(
+                    (float)Math.Sin(t * 0.18f) * 0.016f,
+                    (float)Math.Cos(t * 0.14f) * 0.016f) * strength;
+                if (t % 60 < 4) idle += new Vector2((Game1.random.NextSingle() - 0.5f) * 0.030f, -0.012f) * strength; // wing flutter
                 break;
 
             default: // Generic
@@ -2516,8 +2601,14 @@ public sealed class ModEntry : Mod
 
     /// <summary>
     /// Each clothing slot (hat, shirt, pants, shoes) has a configured chance to fly off during
-    /// ragdoll. Removed items become pickable debris scattered near the farmer.
-    /// Shirt and pants scatter close (cloth physics), boots may roll further (heavier).
+    /// ragdoll.  Removed items become pickable debris scattered near the farmer.
+    /// Per-slot direction bias:
+    ///   Hat   — flies upward and away from the hit direction (head slot).
+    ///   Shirt  — cloth-drop, falls close with low scatter.
+    ///   Pants  — close cloth-drop, crumples quickly.
+    ///   Boots  — bounce and roll further (heavy, hard sole).
+    /// The base chance is scaled per slot so hats (which naturally fly off on head hits)
+    /// are more likely than shirts/pants.
     /// </summary>
     private void TryScatterClothing(Farmer farmer)
     {
@@ -2526,41 +2617,45 @@ public sealed class ModEntry : Mod
             return;
         }
 
-        var chance = this.config.RagdollClothingScatterChance;
+        var baseChance = this.config.RagdollClothingScatterChance;
 
-        if (farmer.hat.Value is not null && Game1.random.NextDouble() < chance)
+        // Hat — highest chance, upward scatter (head slot hit)
+        if (farmer.hat.Value is not null && Game1.random.NextDouble() < baseChance * 1.5f)
         {
+            // Bias upward-and-away: negative Y = up in screen space
             var offset = new Vector2(
-                (Game1.random.NextSingle() - 0.5f) * 80f,
-                (Game1.random.NextSingle() - 0.5f) * 80f);
+                (Game1.random.NextSingle() - 0.5f) * 96f,
+                -40f - Game1.random.NextSingle() * 60f); // upward arc
             Game1.createItemDebris(farmer.hat.Value, farmer.Position + offset, farmer.FacingDirection, Game1.currentLocation);
             farmer.hat.Value = null;
         }
 
-        if (farmer.shirtItem.Value is not null && Game1.random.NextDouble() < chance)
+        // Shirt — soft cloth, falls close
+        if (farmer.shirtItem.Value is not null && Game1.random.NextDouble() < baseChance)
         {
             var offset = new Vector2(
-                (Game1.random.NextSingle() - 0.5f) * 60f,
-                (Game1.random.NextSingle() - 0.5f) * 60f);
+                (Game1.random.NextSingle() - 0.5f) * 55f,
+                (Game1.random.NextSingle() - 0.5f) * 45f);
             Game1.createItemDebris(farmer.shirtItem.Value, farmer.Position + offset, farmer.FacingDirection, Game1.currentLocation);
             farmer.shirtItem.Value = null;
         }
 
-        if (farmer.pantsItem.Value is not null && Game1.random.NextDouble() < chance)
+        // Pants — soft cloth, very close crumple
+        if (farmer.pantsItem.Value is not null && Game1.random.NextDouble() < baseChance * 0.7f)
         {
             var offset = new Vector2(
-                (Game1.random.NextSingle() - 0.5f) * 60f,
-                (Game1.random.NextSingle() - 0.5f) * 60f);
+                (Game1.random.NextSingle() - 0.5f) * 50f,
+                (Game1.random.NextSingle() - 0.5f) * 40f);
             Game1.createItemDebris(farmer.pantsItem.Value, farmer.Position + offset, farmer.FacingDirection, Game1.currentLocation);
             farmer.pantsItem.Value = null;
         }
 
-        if (farmer.boots.Value is not null && Game1.random.NextDouble() < chance)
+        // Boots — heavier, slide/roll further
+        if (farmer.boots.Value is not null && Game1.random.NextDouble() < baseChance * 0.85f)
         {
-            // Boots bounce/roll a bit further (heavier, harder sole)
             var offset = new Vector2(
-                (Game1.random.NextSingle() - 0.5f) * 96f,
-                (Game1.random.NextSingle() - 0.5f) * 96f);
+                (Game1.random.NextSingle() - 0.5f) * 110f,
+                (Game1.random.NextSingle() - 0.5f) * 80f); // wider scatter
             Game1.createItemDebris(farmer.boots.Value, farmer.Position + offset, farmer.FacingDirection, Game1.currentLocation);
             farmer.boots.Value = null;
         }
@@ -3559,6 +3654,15 @@ public sealed class ModEntry : Mod
         var speed    = velocity.LengthSquared();
         var idleStr  = Math.Max(0.05f, this.config.IdleMotionStrength);
 
+        // ── Resolve idle state + per-state profile scale ─────────────────────────
+        var idleState   = this.DetermineIdleState(character);
+        this.idleStates[key] = idleState;
+        var stateProfile = this.config.EnableIdleStateProfiles
+            ? IdleStateProfiles.Get(idleState)
+            : IdleStateProfiles.Relaxed;
+        var ampScale    = stateProfile.AmplitudeScale;
+        idleStr *= ampScale;
+
         // ── Slow-walk micro-sway (fires at low velocity, keeps physics active during meandering)
         // Very subtle step-rhythm sway so body physics never go completely dormant while walking.
         if (speed > 0.001f && speed < 2.5f)
@@ -3586,21 +3690,35 @@ public sealed class ModEntry : Mod
         }
 
         // ── Always-active breathing pulse (every 45 ticks, very subtle) ─────────
-        // Fires regardless of the main idle interval — keeps body/hair gently alive at all times.
-        if (Game1.ticks % 45 == key % 45)
+        // Fires regardless of the main idle interval — keeps body/hair/belly gently alive at all times.
+        // Breathing amplitude scales down when Tired/Sleeping (slow deep breath) and is slightly
+        // stronger when Energetic (fuller chest expansion).
+        var breathPeriod = (int)(45 * stateProfile.FrequencyScale);
+        if (Game1.ticks % Math.Max(1, breathPeriod) == key % Math.Max(1, breathPeriod))
         {
-            var breathPhase = (Game1.ticks / 45) % 2 == 0 ? -1f : 1f;
+            var breathPhase   = (Game1.ticks / Math.Max(1, breathPeriod)) % 2 == 0 ? -1f : 1f;
+            var breathAmp     = idleStr;
             var breathImpulse = new Vector2(
-                (Game1.random.NextSingle() - 0.5f) * 0.04f * idleStr,
-                breathPhase * 0.06f * idleStr);
+                (Game1.random.NextSingle() - 0.5f) * 0.04f * breathAmp,
+                breathPhase * 0.06f * breathAmp);
 
             var bEntry = this.bodyImpulse.TryGetValue(key, out var bExist) ? bExist : Vector2.Zero;
             this.bodyImpulse[key] = bEntry + breathImpulse;
 
+            // Breathing explicitly feeds the hair chain (chest rise lifts hair root slightly)
             if (this.config.EnableHairPhysics)
             {
                 var hEntry = this.hairImpulse.TryGetValue(key, out var hExist) ? hExist : Vector2.Zero;
                 this.hairImpulse[key] = hEntry + breathImpulse * (this.config.HairStrength * 0.25f);
+            }
+
+            // Breathing directly targets the belly bone — feed a dedicated Y impulse so the
+            // belly visibly expands/contracts independently of the chest.  Uses a direct
+            // BoneGroup impulse rather than the general bodyImpulse path.
+            if (this.config.EnableBodyPhysics && this.boneGroups.TryGetValue(key, out var bg))
+            {
+                var bellyBreath = new Vector2(0f, breathPhase * 0.035f * breathAmp);
+                bg.BellyCenter.ApplyImpulse(bellyBreath);
             }
         }
 
@@ -3624,8 +3742,72 @@ public sealed class ModEntry : Mod
             }
         }
 
+        // ── Scheduled idle events (ear twitches, head shakes, blink dips, etc.) ──
+        if (this.config.EnableIdleEvents)
+        {
+            if (!this.idleEventSchedulers.TryGetValue(key, out var sched))
+            {
+                sched = new IdleEventScheduler();
+                this.idleEventSchedulers[key] = sched;
+            }
+
+            var effectiveRate = this.config.IdleEventRate * stateProfile.EventRate;
+            var bImpulse      = this.bodyImpulse.TryGetValue(key, out var bCurr) ? bCurr : Vector2.Zero;
+            var hImpulse      = this.hairImpulse.TryGetValue(key, out var hCurr) ? hCurr : Vector2.Zero;
+            var t             = Game1.ticks;
+
+            // BlinkDip — subtle head dip + hair micro-settle (humanoid)
+            if (sched.ShouldFire(IdleEventKind.BlinkDip, t, effectiveRate))
+            {
+                var dip = new Vector2(0f, 0.06f * idleStr);
+                this.bodyImpulse[key] = bImpulse + dip;
+                if (this.config.EnableHairPhysics)
+                    this.hairImpulse[key] = hImpulse + dip * (this.config.HairStrength * 0.2f);
+            }
+
+            // HeadDip — single forward nod + small hair toss
+            if (sched.ShouldFire(IdleEventKind.HeadDip, t, effectiveRate))
+            {
+                var nod = new Vector2(
+                    (Game1.random.NextSingle() - 0.5f) * 0.04f * idleStr,
+                    0.10f * idleStr);
+                this.bodyImpulse[key] = (this.bodyImpulse.TryGetValue(key, out var bh2) ? bh2 : Vector2.Zero) + nod;
+                if (this.config.EnableHairPhysics)
+                    this.hairImpulse[key] = (this.hairImpulse.TryGetValue(key, out var hh2) ? hh2 : Vector2.Zero) + nod * (this.config.HairStrength * 0.35f);
+            }
+
+            // HeadShake — lateral head shake + hair toss (stronger)
+            if (sched.ShouldFire(IdleEventKind.HeadShake, t, effectiveRate))
+            {
+                var side  = (Game1.random.NextDouble() < 0.5) ? 1f : -1f;
+                var shake = new Vector2(side * 0.18f * idleStr, -0.04f * idleStr);
+                this.bodyImpulse[key] = (this.bodyImpulse.TryGetValue(key, out var bsh) ? bsh : Vector2.Zero) + shake;
+                if (this.config.EnableHairPhysics)
+                    this.hairImpulse[key] = (this.hairImpulse.TryGetValue(key, out var hsh) ? hsh : Vector2.Zero) + shake * (this.config.HairStrength * 0.7f);
+            }
+
+            // BodyShimmy — full-body side shimmy, brief expressive movement
+            if (sched.ShouldFire(IdleEventKind.BodyShimmy, t, effectiveRate))
+            {
+                var side   = (Game1.random.NextDouble() < 0.5) ? 1f : -1f;
+                var shimmy = new Vector2(side * 0.35f * idleStr, 0.05f * idleStr);
+                this.bodyImpulse[key] = (this.bodyImpulse.TryGetValue(key, out var bsm) ? bsm : Vector2.Zero) + shimmy;
+                if (this.config.EnableHairPhysics)
+                    this.hairImpulse[key] = (this.hairImpulse.TryGetValue(key, out var hsm) ? hsm : Vector2.Zero) + shimmy * (this.config.HairStrength * 0.4f);
+                if (this.config.EnableClothingFlowPhysics)
+                {
+                    var flowType  = this.GetClothingFlowType(character);
+                    var clothScale = flowType == ClothingFlowType.Flowy ? 0.60f : 0.28f;
+                    var ci = this.clothingImpulse.TryGetValue(key, out var csh) ? csh : Vector2.Zero;
+                    this.clothingImpulse[key] = ci + shimmy * (clothScale * this.config.ClothingFlowStrength);
+                }
+            }
+        }
+
         // ── Main idle burst (configurable interval, default 90 ticks = ~1.5 s) ─
-        var interval = Math.Max(30, this.config.IdleMotionIntervalTicks);
+        var baseInterval = Math.Max(30, this.config.IdleMotionIntervalTicks);
+        var interval     = (int)(baseInterval * stateProfile.FrequencyScale);
+        interval         = Math.Max(30, interval);
         if (Game1.ticks % interval != key % interval)
         {
             return;
@@ -3771,6 +3953,46 @@ public sealed class ModEntry : Mod
             var ci        = this.clothingImpulse.TryGetValue(key, out var cExist) ? cExist : Vector2.Zero;
             this.clothingImpulse[key] = ci + idleImpulse * (clothScale * this.config.ClothingFlowStrength);
         }
+    }
+
+    // ── Idle state detection ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// Infers the current <see cref="IdleState"/> from game context.
+    /// Priority order: Sleeping > Tired > Alert > Energetic > Curious > Relaxed.
+    /// </summary>
+    private IdleState DetermineIdleState(Character character)
+    {
+        if (character is not Farmer farmer)
+            return IdleState.Relaxed;
+
+        // Sleeping: stamina depleted
+        if (farmer.stamina <= 0f)
+            return IdleState.Sleeping;
+
+        // Tired: low health or low stamina (absolute thresholds — no MaxStamina dependency)
+        var healthFrac = (float)farmer.health / Math.Max(1, farmer.maxHealth);
+        if (healthFrac < 0.30f || farmer.stamina < 50f)
+            return IdleState.Tired;
+
+        // Alert: took damage within the last 3 seconds (~180 ticks)
+        if (this.lastDamageTick >= 0 && Game1.ticks - this.lastDamageTick < 180)
+            return IdleState.Alert;
+
+        // Energetic: full health, good stamina, outdoors during daylight
+        if (healthFrac >= 0.95f && farmer.stamina >= 250f
+            && Game1.currentLocation?.IsOutdoors == true
+            && Game1.timeOfDay >= 600 && Game1.timeOfDay <= 1900
+            && !Game1.isRaining)
+        {
+            return IdleState.Energetic;
+        }
+
+        // Curious: player is actively holding an item or facing an interactable
+        if (farmer.ActiveObject is not null)
+            return IdleState.Curious;
+
+        return IdleState.Relaxed;
     }
 
     // ── Ragdoll ───────────────────────────────────────────────────────────────
@@ -5675,6 +5897,22 @@ public sealed class ModEntry : Mod
             () => "Idle motion strength",
             () => "Overall scale for idle impulse magnitudes. 0.5 = subtle, 1.0 = default, 2.0 = very expressive.",
             0.1f, 3f, 0.1f);
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableIdleStateProfiles, v => this.config.EnableIdleStateProfiles = v,
+            () => "Enable idle state profiles",
+            () => "Scale idle amplitude and frequency based on character state (Relaxed / Alert / Tired / Sleeping / Energetic). " +
+                  "Alert = stiffer/smaller after taking damage. Tired = slower with low health. " +
+                  "Energetic = more expressive when at full health outdoors.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableIdleEvents, v => this.config.EnableIdleEvents = v,
+            () => "Enable scheduled idle events",
+            () => "Fire occasional one-shot idle events (head dip, head shake, body shimmy, blink-dip) " +
+                  "in addition to the continuous idle loop. Breaks up repetition and makes characters look alive.");
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.IdleEventRate, v => this.config.IdleEventRate = v,
+            () => "Idle event rate",
+            () => "Multiplier for how often scheduled idle events fire. 1 = default, 2 = twice as frequent, 0.5 = half.",
+            0.1f, 4f, 0.1f);
 
         // ── Debris & item physics ─────────────────────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "Debris & Item Physics");
