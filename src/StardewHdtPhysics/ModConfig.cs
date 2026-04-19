@@ -136,6 +136,125 @@ public sealed class ModConfig
     /// <summary>Chance (0–1) that one inventory item is dropped during ragdoll.</summary>
     public float RagdollItemDropChance { get; set; } = 0.15f;
 
+    // ── Gear knock-off / inventory spill ──────────────────────────────────────
+    /// <summary>
+    /// Enable the gear knock-off system: equipped items can fly off on strong impacts,
+    /// ragdoll knockdowns, or fall onto the ground as physics objects.
+    /// Disabled by default — opt-in because it changes gameplay feel.
+    /// </summary>
+    public bool EnableGearKnockOff { get; set; } = false;
+
+    /// <summary>
+    /// Enable inventory spill: loose inventory items (consumables, materials, toys)
+    /// can scatter on severe ragdoll or explosion.  Protected/quest/favorite items
+    /// are never spilled.  Disabled by default.
+    /// </summary>
+    public bool EnableInventorySpill { get; set; } = false;
+
+    /// <summary>
+    /// Gear knock-off applies to the farmer/player character.
+    /// </summary>
+    public bool GearKnockOffAffectsPlayer { get; set; } = true;
+
+    /// <summary>
+    /// Gear knock-off applies to NPC characters.
+    /// </summary>
+    public bool GearKnockOffAffectsNpcs { get; set; } = false;
+
+    /// <summary>
+    /// Gear knock-off applies to monsters.
+    /// Useful for boss encounters or comedy runs.
+    /// </summary>
+    public bool GearKnockOffAffectsMonsters { get; set; } = false;
+
+    /// <summary>
+    /// Gear knock-off applies to farm animals (hat/bell/collar accessories).
+    /// </summary>
+    public bool GearKnockOffAffectsFarmAnimals { get; set; } = false;
+
+    /// <summary>
+    /// Gear knock-off applies to pets (toys, hats, collars).
+    /// </summary>
+    public bool GearKnockOffAffectsPets { get; set; } = false;
+
+    /// <summary>
+    /// Minimum normalised impact severity [0–1] required to trigger a detach check.
+    /// 0 = any hit can knock off gear; 1 = only maximum-force ragdoll impacts.
+    /// Default 0.55 — only strong hits.
+    /// </summary>
+    public float GearKnockOffSeverityThreshold { get; set; } = 0.55f;
+
+    /// <summary>
+    /// Radius in tiles within which the owner automatically picks up their own
+    /// dropped belongings each tick.  Set to 0 to disable auto-pickup.
+    /// </summary>
+    public float AutoPickupRadius { get; set; } = 1.5f;
+
+    /// <summary>
+    /// When the player walks over a dropped item they originally owned, automatically
+    /// re-equip it to the original slot (if the slot is still empty).
+    /// </summary>
+    public bool AutoReequipOwnedGear { get; set; } = true;
+
+    /// <summary>
+    /// How long (game ticks) a dropped belonging persists in the world before
+    /// it is converted to item debris and despawned.
+    /// Default 3600 ≈ 60 seconds.  0 = never despawn (not recommended).
+    /// </summary>
+    public int DroppedBelongingsDespawnTicks { get; set; } = 3600;
+
+    /// <summary>
+    /// When true, gear knock-off is only triggered during full ragdoll events.
+    /// When false, any hit above the severity threshold can trigger a detach check.
+    /// Default true (ragdoll-only) — safer, less disruptive.
+    /// </summary>
+    public bool RagdollOnlyGearKnockOff { get; set; } = true;
+
+    /// <summary>
+    /// Comedy / extreme mode: dramatically increases launch impulse and detach
+    /// chance for all gear, producing exaggerated hat-fly and shoe-spin effects.
+    /// All slot-specific chances are multiplied by 4 when this is on.
+    /// </summary>
+    public bool ComedyMode { get; set; } = false;
+
+    /// <summary>
+    /// Maximum number of inventory items that can spill in a single event.
+    /// Prevents one explosion from scattering an entire backpack.
+    /// </summary>
+    public int MaxInventorySpillPerEvent { get; set; } = 3;
+
+    /// <summary>
+    /// When true, inventory spill only occurs during heavy-impact events
+    /// (strong ragdoll, explosion, stun).  When false, any ragdoll can spill.
+    /// </summary>
+    public bool InventorySpillHeavyImpactOnly { get; set; } = true;
+
+    /// <summary>
+    /// Per-slot detach chance override for Hat.
+    /// 0 = use archetype default; positive value overrides.
+    /// Default 0 (use archetype default ≈ 0.35).
+    /// </summary>
+    public float HatDetachChanceOverride { get; set; } = 0f;
+
+    /// <summary>
+    /// Per-slot detach chance override for Shoes.
+    /// Default 0 (use archetype default ≈ 0.20).
+    /// </summary>
+    public float ShoesDetachChanceOverride { get; set; } = 0f;
+
+    /// <summary>
+    /// Per-slot detach chance override for Shirt/top.
+    /// Default 0 (use archetype default ≈ 0.05).
+    /// </summary>
+    public float ShirtDetachChanceOverride { get; set; } = 0f;
+
+    /// <summary>
+    /// Comma-separated list of item names that are always protected from spilling
+    /// or being knocked off regardless of impact.  Example: "Prismatic Shard, Legend".
+    /// Case-insensitive substring match.
+    /// </summary>
+    public string ProtectedItemNames { get; set; } = string.Empty;
+
     // ── Monster archetype physics ─────────────────────────────────────────────
     public float MonsterArchetypeStrength { get; set; } = 0.55f;
 

@@ -157,6 +157,114 @@ public sealed class CreaturePhysicsProfile
     /// <summary>Event rate multiplier when in Alert state (more twitchy).</summary>
     public float IdleAlertEventRate { get; set; } = 1.6f;
 
+    // ── Idle archetype signature ──────────────────────────────────────────────
+    //
+    // These fields encode the *character* of idle motion for each archetype —
+    // which signals are prominent, how heavy/light the breathing is, how frequent
+    // the tail wag, etc.  The idle motion generator in ModEntry.SimulateIdle /
+    // SimulateMonsterIdle reads these values to choose which IdleEventKind to
+    // schedule and with what amplitudes, avoiding hardcoded per-species switch
+    // statements.
+    //
+    // All amplitudes are in spring-unit space (before PhysicsVisualScale).
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Amplitude of the breathing-driven chest/belly impulse applied each breath cycle.
+    /// 0 = no breathing impulse.  Humanoids and large animals use ~0.012; slimes ~0.020.
+    /// </summary>
+    public float BreathingAmplitude { get; set; } = 0.012f;
+
+    /// <summary>
+    /// Period in ticks between breathing impulse peaks.
+    /// Default 90 (~1.5 s at 60 ticks/s).  Sleeping creatures use ~180; excited use ~60.
+    /// </summary>
+    public int BreathingPeriodTicks { get; set; } = 90;
+
+    /// <summary>
+    /// How strongly breathing is fed into the hair chain as a secondary driver.
+    /// 0 = hair is unaffected by breathing; 0.15 = subtle sway; 0.4 = very expressive.
+    /// </summary>
+    public float BreathingHairFeedMult { get; set; } = 0.15f;
+
+    /// <summary>
+    /// How strongly breathing is fed into the belly bone.
+    /// 0 = belly unaffected; 0.6 = strong belly heave.
+    /// </summary>
+    public float BreathingBellyFeedMult { get; set; } = 0.40f;
+
+    /// <summary>
+    /// How strongly the tail base is driven by hip sway during idle.
+    /// 0 = tail self-driven only; 1 = tail fully follows hips.
+    /// Default 0.35 for tailed creatures.
+    /// </summary>
+    public float IdleTailHipCoupling { get; set; } = 0.35f;
+
+    /// <summary>
+    /// Average ticks between tail wag bursts (idle schedule, non-emotional).
+    /// 0 = no idle wag schedule.  PetDog = 50 (frequent), Dragon = 250 (rare).
+    /// </summary>
+    public int IdleTailWagIntervalTicks { get; set; } = 0;
+
+    /// <summary>
+    /// Number of wag-burst impulses fired per scheduled wag event.
+    /// Default 1.  PetDog uses 3 (rapid wagging bursts).
+    /// </summary>
+    public int IdleTailWagBurstCount { get; set; } = 1;
+
+    /// <summary>
+    /// Average ticks between ear-twitch events.
+    /// 0 = no ear twitches.  Pets and farm animals usually have one; slimes/skeletons don't.
+    /// </summary>
+    public int IdleEarTwitchIntervalTicks { get; set; } = 0;
+
+    /// <summary>
+    /// Average ticks between snout-bob / sniff events.
+    /// 0 = no snout-bob.  Used by pigs, rabbits, wolves, dogs.
+    /// </summary>
+    public int IdleSnoutBobIntervalTicks { get; set; } = 0;
+
+    /// <summary>
+    /// Average ticks between fur-ripple events.
+    /// 0 = no fur ripple.  Fur ripple is driven by breathing / torso sway — this
+    /// schedules an *additional* occasional surface ripple burst.
+    /// </summary>
+    public int IdleFurRippleIntervalTicks { get; set; } = 0;
+
+    /// <summary>
+    /// Average ticks between wing-rustle / fold-unfold events.
+    /// 0 = no wing rustles.  Bats and dragons use low values (frequent membrane
+    /// fidgeting); birds use higher values.
+    /// </summary>
+    public int IdleWingRustleIntervalTicks { get; set; } = 0;
+
+    /// <summary>
+    /// List of <see cref="IdleEventKind"/> values that are active for this archetype.
+    /// Empty = use the global default set for humanoids.
+    ///
+    /// Stored as a comma-separated string for JSON compatibility.
+    /// Example: "EarTwitch,TailFlick,SnoutSniff"
+    /// </summary>
+    public string IdleEventKinds { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Parses <see cref="IdleEventKinds"/> into a list of <see cref="IdleEventKind"/> values.
+    /// Returns an empty list if the field is empty (fall back to caller-default).
+    /// </summary>
+    public IReadOnlyList<IdleEventKind> GetIdleEventKinds()
+    {
+        if (string.IsNullOrWhiteSpace(IdleEventKinds)) return Array.Empty<IdleEventKind>();
+
+        var result = new List<IdleEventKind>();
+        foreach (var part in IdleEventKinds.Split(','))
+        {
+            var trimmed = part.Trim();
+            if (Enum.TryParse<IdleEventKind>(trimmed, ignoreCase: true, out var kind))
+                result.Add(kind);
+        }
+        return result;
+    }
+
     // ── Spring tuning ─────────────────────────────────────────────────────────
 
     /// <summary>Multiplies the configured stiffness for all chains on this species.</summary>
@@ -295,6 +403,10 @@ public static class CreaturePhysicsProfileLibrary
             VelocityImpulseY     = 0.04f,
             HitBoneImpulseMult   = 1.0f,
             IdleBodyAmplitude    = 0.008f,
+            BreathingAmplitude   = 0.010f,
+            BreathingPeriodTicks = 90,
+            BreathingHairFeedMult  = 0.10f,
+            BreathingBellyFeedMult = 0.30f,
         };
 
         // ── Slime — bouncy jello, omnidirectional wobble ───────────────────────
@@ -312,6 +424,12 @@ public static class CreaturePhysicsProfileLibrary
             HitTailFollowMult    = 0.00f,
             HitWingFollowMult    = 0.00f,
             IdleBodyAmplitude    = 0.014f, // visibly wobbles at rest
+            // Slime: slow internal pulse + occasional blob lean
+            BreathingAmplitude      = 0.020f,
+            BreathingPeriodTicks    = 80,
+            BreathingBellyFeedMult  = 0.70f,
+            IdleEventKinds          = "FurRipple,BodyShimmy",
+            IdleFurRippleIntervalTicks = 120,
         };
 
         // ── Bat — floppy wing flutter, fast lateral snap-back ─────────────────
@@ -326,6 +444,11 @@ public static class CreaturePhysicsProfileLibrary
             HasWings             = true,
             HitWingFollowMult    = 0.35f, // wings react strongly to body hit
             IdleBodyAmplitude    = 0.010f,
+            // Bat: perched body sway, wing membrane twitch, head turns
+            BreathingAmplitude      = 0.009f,
+            BreathingPeriodTicks    = 70,
+            IdleEventKinds          = "WingRustle,HeadShake",
+            IdleWingRustleIntervalTicks = 80,
         };
 
         // ── Worm — Y-axis compression/extension ────────────────────────────────
@@ -373,6 +496,16 @@ public static class CreaturePhysicsProfileLibrary
             HitTailFollowMult    = 0.12f,
             IdleBodyAmplitude    = 0.008f,
             IdleAppendageAmplitude = 0.010f,
+            // Wolf/furry: chest breathing, ear twitch, tail low sway, sniff/bob
+            BreathingAmplitude      = 0.012f,
+            BreathingPeriodTicks    = 85,
+            BreathingBellyFeedMult  = 0.45f,
+            IdleTailHipCoupling     = 0.40f,
+            IdleTailWagIntervalTicks = 200,
+            IdleEarTwitchIntervalTicks = 150,
+            IdleSnoutBobIntervalTicks  = 120,
+            IdleFurRippleIntervalTicks = 90,
+            IdleEventKinds = "EarTwitch,TailFlick,FurRipple,SnoutSniff",
         };
 
         // ── Skeleton — sharp clatter, very fast decay ─────────────────────────
@@ -414,6 +547,15 @@ public static class CreaturePhysicsProfileLibrary
             IdleAppendageAmplitude = 0.020f,
             StiffnessMult          = 0.80f,   // slightly looser springs = lumbering mass feel
             DampingMult            = 0.90f,
+            // Dragon idle: slow chest expansion, tail swish every few seconds, wing membrane settle
+            BreathingAmplitude        = 0.018f,
+            BreathingPeriodTicks      = 110,   // slow deep breaths
+            BreathingBellyFeedMult    = 0.60f,
+            BreathingHairFeedMult     = 0.05f,
+            IdleTailHipCoupling       = 0.50f,
+            IdleTailWagIntervalTicks  = 250,   // occasional tail swish
+            IdleWingRustleIntervalTicks = 180, // periodic membrane settle
+            IdleEventKinds = "TailFlick,WingRustle,BodyShimmy",
         };
 
         // ── Elemental — sinusoidal magical energy pulsing ─────────────────────
@@ -507,6 +649,16 @@ public static class CreaturePhysicsProfileLibrary
             IdleAppendageAmplitude = 0.015f,
             StiffnessMult          = 1.10f,
             DampingMult            = 1.15f,
+            // Heavy farm animal: heavy breathing, slow snout bob, tail swish, ear flick
+            BreathingAmplitude        = 0.016f,
+            BreathingPeriodTicks      = 100,  // slower breaths, big animal
+            BreathingBellyFeedMult    = 0.65f,
+            IdleTailHipCoupling       = 0.35f,
+            IdleTailWagIntervalTicks  = 180,
+            IdleEarTwitchIntervalTicks = 130,
+            IdleSnoutBobIntervalTicks  = 160,
+            IdleFurRippleIntervalTicks = 200,
+            IdleEventKinds = "EarTwitch,TailFlick,SnoutSniff,FurRipple,HeadDip",
         };
 
         // ── FarmAnimalLight — small farm animals: rabbit, chicken, duck, pig ──
@@ -525,6 +677,14 @@ public static class CreaturePhysicsProfileLibrary
             HitTailFollowMult      = 0.10f,
             IdleBodyAmplitude      = 0.009f,
             IdleAppendageAmplitude = 0.016f,  // active ear flop
+            // Light farm animal: head bob (chicken), snout bob (pig/rabbit), ear flicks
+            BreathingAmplitude        = 0.010f,
+            BreathingPeriodTicks      = 75,
+            BreathingBellyFeedMult    = 0.50f,
+            IdleTailWagIntervalTicks  = 100,
+            IdleEarTwitchIntervalTicks = 90,
+            IdleSnoutBobIntervalTicks  = 100,
+            IdleEventKinds = "EarTwitch,HeadDip,TailFlick,SnoutSniff",
         };
 
         // ── PetDog — dog: floppy ears, tail wag, collar/charm chain ───────────
@@ -542,6 +702,16 @@ public static class CreaturePhysicsProfileLibrary
             HitTailFollowMult      = 0.15f,
             IdleBodyAmplitude      = 0.010f,
             IdleAppendageAmplitude = 0.020f,  // wagging tail even at rest
+            // Dog: tail wag bursts, ear twitches, chest breathing, head tilt
+            BreathingAmplitude        = 0.013f,
+            BreathingPeriodTicks      = 75,
+            BreathingBellyFeedMult    = 0.45f,
+            IdleTailHipCoupling       = 0.50f,
+            IdleTailWagIntervalTicks  = 50,   // frequent happy wag
+            IdleTailWagBurstCount     = 3,    // 3-burst wag
+            IdleEarTwitchIntervalTicks = 100,
+            IdleSnoutBobIntervalTicks  = 90,
+            IdleEventKinds = "TailWag,EarTwitch,SnoutSniff,HeadDip,PawShift",
         };
 
         // ── PetCat — cat: twitchy ears, S-curve tail, light recoil ───────────
@@ -560,6 +730,15 @@ public static class CreaturePhysicsProfileLibrary
             HitTailFollowMult      = 0.20f,
             IdleBodyAmplitude      = 0.008f,
             IdleAppendageAmplitude = 0.018f,
+            // Cat: tail flick, ear twitch, loaf-breathing, head turn
+            BreathingAmplitude        = 0.010f,
+            BreathingPeriodTicks      = 95,    // calm loaf breathing
+            BreathingBellyFeedMult    = 0.35f,
+            IdleTailHipCoupling       = 0.30f,
+            IdleTailWagIntervalTicks  = 90,   // slow independent tail flick
+            IdleTailWagBurstCount     = 1,
+            IdleEarTwitchIntervalTicks = 110,
+            IdleEventKinds = "TailFlick,EarTwitch,HeadShake,BlinkDip",
         };
 
         // ── FantasyFamiliar — dragon familiar, fairy, magical companion ───────
@@ -581,6 +760,14 @@ public static class CreaturePhysicsProfileLibrary
             HitTailFollowMult      = 0.15f,
             IdleBodyAmplitude      = 0.010f,
             IdleAppendageAmplitude = 0.014f,
+            // Familiar: perched shimmer breathing, wing flap, tail sway
+            BreathingAmplitude        = 0.011f,
+            BreathingPeriodTicks      = 70,
+            BreathingBellyFeedMult    = 0.40f,
+            IdleTailHipCoupling       = 0.45f,
+            IdleTailWagIntervalTicks  = 100,
+            IdleWingRustleIntervalTicks = 90,
+            IdleEventKinds = "WingRustle,TailFlick,BodyShimmy",
         };
 
         return d;

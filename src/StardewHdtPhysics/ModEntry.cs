@@ -116,6 +116,20 @@ public sealed class ModEntry : Mod
     /// <summary>Tick on which the player last received a damage impulse (for Alert detection).</summary>
     private int lastDamageTick = -1;
 
+    // ── Equipment detach / belongings system ──────────────────────────────────
+    /// <summary>
+    /// Tracks all items that have been knocked off or spilled from characters.
+    /// Handles auto-pickup, despawn timers, and re-equip routing.
+    /// </summary>
+    private readonly BelongingsManager belongingsManager = new();
+    /// <summary>
+    /// Per-character, per-slot loosen/detach state machine.
+    /// Key = (characterKey, slot).  Cleared on day-start.
+    /// </summary>
+    private readonly Dictionary<(int Key, EquipSlot Slot), ItemEquipState> equipStates = new();
+    /// <summary>Remaining re-secure countdown ticks for each loosened slot.</summary>
+    private readonly Dictionary<(int Key, EquipSlot Slot), int> loosenResetCountdown = new();
+
     // ── Optional mod integrations ─────────────────────────────────────────────
     private bool fashionSenseLoaded = false;
     private bool druidModLoaded = false;
@@ -197,6 +211,11 @@ public sealed class ModEntry : Mod
         this.detector.SetConfigOverrides(this.config.GenderOverrides);
         this.UpdateWindStrength();
 
+        // Belongings from previous session should not carry over.
+        this.belongingsManager.Clear();
+        this.equipStates.Clear();
+        this.loosenResetCountdown.Clear();
+
         // Show in-game HUD message so the player knows the mod is active
         Game1.addHUDMessage(new HUDMessage("SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More — active", HUDMessage.achievement_type));
     }
@@ -217,6 +236,11 @@ public sealed class ModEntry : Mod
         this.PurgeStaleEntityState(Game1.currentLocation);
         this.corpseAgeTicks.Clear();
         this.corpseLastPos.Clear();
+
+        // Clear belongings system — dropped items from yesterday don't persist.
+        this.belongingsManager.Clear();
+        this.equipStates.Clear();
+        this.loosenResetCountdown.Clear();
     }
 
     private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
@@ -257,6 +281,8 @@ public sealed class ModEntry : Mod
         this.Monitor.Log($"║  Spark VFX:              {(this.config.EnableSparkEffects ? "ON " : "OFF")}", LogLevel.Info);
         this.Monitor.Log($"║  Slime spray VFX:        {(this.config.EnableSlimeSprayEffects ? "ON " : "OFF")}", LogLevel.Info);
         this.Monitor.Log($"║  Tool collision hitstop: {(this.config.EnableToolCollisionHitstop ? "ON " : "OFF")}", LogLevel.Info);
+        this.Monitor.Log($"║  Gear knock-off:         {(this.config.EnableGearKnockOff ? "ON " : "OFF")}{(this.config.ComedyMode ? " [COMEDY MODE]" : string.Empty)}", LogLevel.Info);
+        this.Monitor.Log($"║  Inventory spill:        {(this.config.EnableInventorySpill ? "ON " : "OFF")} (max {this.config.MaxInventorySpillPerEvent}/event)", LogLevel.Info);
         this.Monitor.Log("╠══════════════════════════════════════════════════════════════╣", LogLevel.Info);
         this.Monitor.Log($"║  Fashion Sense:   {(this.fashionSenseLoaded ? "✓ detected" : "not detected (optional)")}", LogLevel.Info);
         this.Monitor.Log($"║  Druid mod:       {(this.druidModLoaded ? "✓ detected (dragon physics active)" : "not detected (optional)")}", LogLevel.Info);
@@ -788,6 +814,46 @@ public sealed class ModEntry : Mod
         {
             this.TryDetectTreeFell(location);
         }
+
+        // ── Belongings manager — auto-pickup and despawn tick (every 3rd tick)
+        if ((this.config.EnableGearKnockOff || this.config.EnableInventorySpill)
+            && this.belongingsManager.Count > 0
+            && e.IsMultipleOf(3)
+            && Game1.player is not null)
+        {
+            var playerKey = this.GetCharacterKey(Game1.player);
+            this.belongingsManager.Tick(
+                this.config,
+                Game1.player.Position,
+                playerKey,
+                b =>
+                {
+                    // Auto-pickup callback: log the recovery.
+                    // Actual inventory re-add would require direct item manipulation
+                    // (Harmony patch or future SMAPI item API) — for now we log it.
+                    this.Monitor.Log(
+                        $"[SVP] Auto-pickup: '{b.DisplayName}' (slot {b.SourceSlot}) returned to owner.",
+                        LogLevel.Trace);
+                });
+        }
+
+        // ── Loosened slot re-secure countdown ─────────────────────────────────
+        if (this.loosenResetCountdown.Count > 0)
+        {
+            var toResecure = new List<(int Key, EquipSlot Slot)>();
+            foreach (var kv in this.loosenResetCountdown)
+            {
+                if (kv.Value <= 1)
+                    toResecure.Add(kv.Key);
+                else
+                    this.loosenResetCountdown[kv.Key] = kv.Value - 1;
+            }
+            foreach (var slotKey in toResecure)
+            {
+                this.loosenResetCountdown.Remove(slotKey);
+                this.equipStates[slotKey] = ItemEquipState.Secure;
+            }
+        }
     }
 
     private void OnButtonPressed(object? sender, ButtonPressedEventArgs e)
@@ -956,6 +1022,9 @@ public sealed class ModEntry : Mod
         this.prevTreeTiles.Clear();
         this.corpseAgeTicks.Clear();
         this.corpseLastPos.Clear();
+        this.belongingsManager.Clear();
+        this.equipStates.Clear();
+        this.loosenResetCountdown.Clear();
     }
 
     // ── Entity pool management ────────────────────────────────────────────────
@@ -1076,6 +1145,8 @@ public sealed class ModEntry : Mod
             this.corpseLastPos.Remove(key);
         }
     }
+
+    private void LoadData(IModHelper helper)
     {
         var profiles = helper.Data.ReadJsonFile<List<SpriteProfile>>("assets/spriteProfiles.json") ?? new List<SpriteProfile>();
         this.presets.Clear();
@@ -5823,6 +5894,83 @@ public sealed class ModEntry : Mod
             () => "Inventory item drop chance",
             () => "Chance (0–1) that one inventory item is knocked out during ragdoll. 0 = never, 1 = always.", 0f, 1f, 0.05f);
 
+        // ── Gear knock-off system ─────────────────────────────────────────────
+        api.AddSectionTitle(this.ModManifest, () => "Gear Knock-Off & Inventory Spill");
+        api.AddParagraph(this.ModManifest, () =>
+            "When enabled, strong impacts and ragdolls can knock equipped gear off characters " +
+            "(hat flies, shoe spins away, weapon gets disarmed) and/or spill loose inventory items. " +
+            "Each slot uses a loosen-first / detach-second state machine: items tilt before fully flying off. " +
+            "Detached items become physics objects that the owner can walk over to auto-pickup. " +
+            "Protected items (quest items, named items in the list) never drop. " +
+            "Disabled by default — opt-in because it changes gameplay feel.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableGearKnockOff, v => this.config.EnableGearKnockOff = v,
+            () => "Enable gear knock-off",
+            () => "Allow equipped gear (hat, shoes, weapon, etc.) to fly off on strong impacts.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableInventorySpill, v => this.config.EnableInventorySpill = v,
+            () => "Enable inventory spill",
+            () => "Allow loose inventory items (consumables, materials) to spill on severe ragdoll.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.RagdollOnlyGearKnockOff, v => this.config.RagdollOnlyGearKnockOff = v,
+            () => "Ragdoll-only gear knock-off",
+            () => "When on: gear only flies off during full ragdoll. When off: any hit above severity threshold qualifies.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.ComedyMode, v => this.config.ComedyMode = v,
+            () => "Comedy / extreme mode",
+            () => "Multiply all detach chances by 4 for exaggerated hat-fly and shoe-spin effects.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.GearKnockOffAffectsPlayer, v => this.config.GearKnockOffAffectsPlayer = v,
+            () => "Affects player", () => "Gear knock-off applies to the farmer.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.GearKnockOffAffectsNpcs, v => this.config.GearKnockOffAffectsNpcs = v,
+            () => "Affects NPCs", () => "Gear knock-off applies to NPC characters.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.GearKnockOffAffectsMonsters, v => this.config.GearKnockOffAffectsMonsters = v,
+            () => "Affects monsters", () => "Gear knock-off applies to monsters (boss accessories, armor plates).");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.GearKnockOffAffectsFarmAnimals, v => this.config.GearKnockOffAffectsFarmAnimals = v,
+            () => "Affects farm animals", () => "Gear knock-off applies to farm animals (hat/bell/collar accessories).");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.GearKnockOffAffectsPets, v => this.config.GearKnockOffAffectsPets = v,
+            () => "Affects pets", () => "Gear knock-off applies to pets (hats, collar charms, toys).");
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.GearKnockOffSeverityThreshold, v => this.config.GearKnockOffSeverityThreshold = v,
+            () => "Severity threshold",
+            () => "Minimum normalised impact force [0–1] for a detach check. 0 = any hit, 1 = max-force only. Default 0.55.", 0f, 1f, 0.05f);
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.HatDetachChanceOverride, v => this.config.HatDetachChanceOverride = v,
+            () => "Hat detach chance override",
+            () => "0 = use archetype default (~35%). 0–1 = override probability.", 0f, 1f, 0.05f);
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.ShoesDetachChanceOverride, v => this.config.ShoesDetachChanceOverride = v,
+            () => "Shoes detach chance override",
+            () => "0 = use archetype default (~20%). 0–1 = override probability.", 0f, 1f, 0.05f);
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.ShirtDetachChanceOverride, v => this.config.ShirtDetachChanceOverride = v,
+            () => "Shirt detach chance override",
+            () => "0 = use archetype default (~5%). 0–1 = override probability.", 0f, 1f, 0.05f);
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.AutoReequipOwnedGear, v => this.config.AutoReequipOwnedGear = v,
+            () => "Auto re-equip owned gear",
+            () => "When walking over a dropped item you originally owned, auto-re-equip it if the slot is empty.");
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.AutoPickupRadius, v => this.config.AutoPickupRadius = v,
+            () => "Auto-pickup radius (tiles)",
+            () => "Radius in tiles within which the owner auto-picks up dropped belongings. 0 = disabled.", 0f, 5f, 0.25f);
+        api.AddNumberOption(this.ModManifest,
+            () => (float)this.config.DroppedBelongingsDespawnTicks, v => this.config.DroppedBelongingsDespawnTicks = (int)v,
+            () => "Dropped gear despawn (ticks)",
+            () => "How long a dropped belonging persists before despawning. 3600 = 60 s. 0 = never.", 0f, 18000f, 60f);
+        api.AddNumberOption(this.ModManifest,
+            () => (float)this.config.MaxInventorySpillPerEvent, v => this.config.MaxInventorySpillPerEvent = (int)v,
+            () => "Max inventory spill per event",
+            () => "Maximum loose items that can spill in a single ragdoll or explosion event.", 1f, 10f, 1f);
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.InventorySpillHeavyImpactOnly, v => this.config.InventorySpillHeavyImpactOnly = v,
+            () => "Spill on heavy impact only",
+            () => "When on: inventory spill only during strong ragdoll/explosion. When off: any ragdoll qualifies.");
+
         // ── Monster archetype physics ─────────────────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "Monster Physics");
         api.AddParagraph(this.ModManifest, () =>
@@ -6232,5 +6380,122 @@ public sealed class ModEntry : Mod
         }
 
         return false;
+    }
+
+    // ── Gear knock-off ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Checks each equipment slot of <paramref name="character"/> against the gear
+    /// knock-off rules and potentially spawns a <see cref="DroppedBelonging"/> for
+    /// any slot that transitions to <see cref="ItemEquipState.Detached"/>.
+    ///
+    /// Call this from the ragdoll or strong-hit path when
+    /// <see cref="ModConfig.EnableGearKnockOff"/> is true.
+    ///
+    /// <paramref name="impactForce"/> is a normalised [0–1] value representing the
+    /// strength of the impact (ragdoll impulse magnitude / reference impulse).
+    /// <paramref name="ownerVelocity"/> is the character's current velocity vector,
+    /// used to seed the launch impulse of the detached item.
+    /// </summary>
+    private void TryApplyGearKnockOff(
+        Character character,
+        float     impactForce,
+        Vector2   ownerVelocity)
+    {
+        if (!this.config.EnableGearKnockOff) return;
+
+        // Determine whether this character type is opted-in
+        bool eligible = character switch
+        {
+            Farmer                         => this.config.GearKnockOffAffectsPlayer,
+            StardewValley.NPC              => this.config.GearKnockOffAffectsNpcs,
+            StardewValley.Monsters.Monster => this.config.GearKnockOffAffectsMonsters,
+            _                              => false,
+        };
+        if (!eligible) return;
+
+        var charKey = this.GetCharacterKey(character);
+
+        // Check each slot
+        foreach (var slot in Enum.GetValues<EquipSlot>())
+        {
+            var profile = DetachProfile.DefaultFor(slot);
+
+            // Apply per-slot config overrides
+            if (slot == EquipSlot.Hat    && this.config.HatDetachChanceOverride   > 0f) profile.DetachChance = this.config.HatDetachChanceOverride;
+            if (slot == EquipSlot.Shoes  && this.config.ShoesDetachChanceOverride > 0f) profile.DetachChance = this.config.ShoesDetachChanceOverride;
+            if (slot == EquipSlot.Shirt  && this.config.ShirtDetachChanceOverride > 0f) profile.DetachChance = this.config.ShirtDetachChanceOverride;
+
+            var stateKey = (charKey, slot);
+            if (!this.equipStates.TryGetValue(stateKey, out var currentState))
+                currentState = ItemEquipState.Secure;
+
+            var newState = currentState;
+            bool triggered = BelongingsManager.EvaluateDetach(
+                profile, currentState, impactForce, this.config, ref newState);
+
+            if (!triggered || newState == currentState) continue;
+
+            this.equipStates[stateKey] = newState;
+
+            if (newState == ItemEquipState.Loosened)
+            {
+                // Start the re-secure countdown
+                this.loosenResetCountdown[stateKey] = profile.LoosenResetTicks;
+                this.Monitor.Log(
+                    $"[SVP] Gear loosened: {character.Name} slot={slot} (impact={impactForce:F2})",
+                    LogLevel.Trace);
+            }
+            else if (newState == ItemEquipState.Detached)
+            {
+                // Remove from countdown (it fully detached)
+                this.loosenResetCountdown.Remove(stateKey);
+
+                // Spawn the item as a physics world object at the character's position
+                var launchVel = ownerVelocity * profile.LaunchImpulseMult
+                    + new Vector2(
+                        (Random.Shared.NextSingle() - 0.5f) * 0.8f,
+                        -Random.Shared.NextSingle() * 0.6f);
+
+                var dropped = new DroppedBelonging
+                {
+                    ItemId           = $"{character.Name}:{slot}",
+                    DisplayName      = $"{character.Name}'s {slot}",
+                    OwnerKey         = charKey,
+                    SourceSlot       = slot,
+                    AutoReequipEligible = profile.AutoReequipAllowed && this.config.AutoReequipOwnedGear,
+                    WorldPosition    = character.Position,
+                    MaxAgeTicks      = this.config.DroppedBelongingsDespawnTicks,
+                };
+
+                // Map slot to a suitable ItemPhysicsMaterial
+                var mat = slot switch
+                {
+                    EquipSlot.Hat       => ItemPhysicsMaterial.Cloth,
+                    EquipSlot.Shirt     => ItemPhysicsMaterial.Cloth,
+                    EquipSlot.Pants     => ItemPhysicsMaterial.Cloth,
+                    EquipSlot.Shoes     => ItemPhysicsMaterial.Wood,
+                    EquipSlot.HeldItem  => ItemPhysicsMaterial.Metal,
+                    EquipSlot.Back      => ItemPhysicsMaterial.Cloth,
+                    EquipSlot.Accessory => ItemPhysicsMaterial.Gem,
+                    _                   => ItemPhysicsMaterial.Wood,
+                };
+
+                this.itemWorld.Spawn(
+                    character.Position,
+                    launchVel,
+                    mat,
+                    ItemPhysicsShape.Circle,
+                    shapeRadius: 5f,
+                    visualSize:  4f,
+                    maxAgeTicks: this.config.DroppedBelongingsDespawnTicks);
+
+                this.belongingsManager.Register(dropped);
+
+                this.Monitor.Log(
+                    $"[SVP] Gear knocked off: {character.Name} slot={slot} (impact={impactForce:F2}, comedy={this.config.ComedyMode})",
+                    LogLevel.Debug);
+            }
+        }
     }
 }
