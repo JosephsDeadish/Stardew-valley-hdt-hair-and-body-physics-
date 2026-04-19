@@ -43,8 +43,12 @@ public sealed class ModEntry : Mod
 
     // ── Visual render wobble (applied during RenderingWorld, restored after) ──
     private readonly Dictionary<Character, Vector2> savedPhysicsPositions = new();
-    private const float PhysicsVisualScale = 10f;  // px multiplier: impulse 0.4 → 4 px wobble
-    private const float PhysicsVisualMaxPx  = 10f; // hard cap so characters never teleport
+    // Scale: impulse 0.4 → ~6 px wobble (was 4 px at scale 10).
+    // Increased to 15 for more visible HDT-style jiggle (still subtle on-screen).
+    private const float PhysicsVisualScale = 15f;
+    // Hard cap raised to 14 px so dramatic hits produce visible body displacement
+    // while still preventing teleport artefacts.
+    private const float PhysicsVisualMaxPx  = 14f;
 
     // ── Wind / weather ────────────────────────────────────────────────────────
     private float currentWindStrength = 0f;
@@ -1944,6 +1948,19 @@ public sealed class ModEntry : Mod
         var playerPos  = player.Position;
         var swingRange = 128f; // ~2 tiles
 
+        // Compute the actual strike target position: one tile ahead of the player's facing
+        // direction. This is where ALL debris/spark particles should originate so they appear
+        // AT the struck object rather than at the player's feet.
+        var facingOffset = player.FacingDirection switch
+        {
+            0 => new Vector2(0f,   -64f),
+            1 => new Vector2(64f,    0f),
+            2 => new Vector2(0f,    64f),
+            3 => new Vector2(-64f,   0f),
+            _ => Vector2.Zero
+        };
+        var strikePos = playerPos + facingOffset; // position to spawn VFX at
+
         // ── Slime spray ───────────────────────────────────────────────────────
         if (this.config.EnableSlimeSprayEffects)
         {
@@ -1994,7 +2011,8 @@ public sealed class ModEntry : Mod
         }
 
         // ── Spark VFX + tool swing-back hitstop ───────────────────────────────
-        if (this.config.EnableSparkEffects || this.config.EnableToolCollisionHitstop)
+        if (this.config.EnableSparkEffects || this.config.EnableToolCollisionHitstop
+            || this.config.EnableTypedPhysicsDebris)
         {
             var hitHard = this.DetectHardSurfaceNear(player);
             if (hitHard)
@@ -2006,7 +2024,8 @@ public sealed class ModEntry : Mod
                     {
                         var sAngle = Game1.random.NextSingle() * MathF.PI * 2f;
                         var sDist  = 15f + Game1.random.NextSingle() * 25f;
-                        var sPos   = playerPos + new Vector2(MathF.Cos(sAngle) * sDist, MathF.Sin(sAngle) * sDist);
+                        // Sparks radiate from the actual strike position
+                        var sPos   = strikePos + new Vector2(MathF.Cos(sAngle) * sDist, MathF.Sin(sAngle) * sDist);
                         // Use debris type 10 (yellow/orange sparkle) for sparks
                         Game1.createRadialDebris(Game1.currentLocation, 10, (int)(sPos.X / 64), (int)(sPos.Y / 64), 1, false);
                     }
@@ -2015,7 +2034,7 @@ public sealed class ModEntry : Mod
                 if (this.config.EnableToolCollisionHitstop)
                 {
                     // Use the HitContact resolver for proper stone/metal wall feedback
-                    var hitDir = Game1.player.FacingDirection switch
+                    var hitDir = player.FacingDirection switch
                     {
                         0 => new Vector2(0f, -1f),
                         1 => new Vector2(1f,  0f),
@@ -2029,16 +2048,16 @@ public sealed class ModEntry : Mod
                     this.ApplyHitContactFeedback(player, null, in wallContact, wallProfile);
                 }
 
-                // Spawn typed stone/ore debris particles — material-matched to what was struck
+                // Typed debris at strike position — material-matched to what was struck
                 if (this.config.EnableTypedPhysicsDebris)
                 {
                     var stoneKind = (tool is Pickaxe) ? PhysicsParticleKind.StoneChunk : PhysicsParticleKind.OreChunk;
-                    this.SpawnTypedDebris(playerPos, stoneKind,               3 + Game1.random.Next(4), 1.5f);
-                    this.SpawnTypedDebris(playerPos, PhysicsParticleKind.Sawdust, 4 + Game1.random.Next(5), 0.7f);
+                    this.SpawnTypedDebris(strikePos, stoneKind,               3 + Game1.random.Next(4), 1.5f);
+                    this.SpawnTypedDebris(strikePos, PhysicsParticleKind.Sawdust, 4 + Game1.random.Next(5), 0.7f);
 
                     // Persistent ItemPhysics chunks: 2–4 heavy pieces that arc, bounce,
                     // then sleep on the ground.  They outlive VFX particles and react to
-                    // walk-scatter.  Material matched to pickaxe vs other tools.
+                    // walk-scatter.  Spawn at the STRIKE point, not the player.
                     var chMat = (tool is Pickaxe) ? ItemPhysicsMaterial.Stone : ItemPhysicsMaterial.Ore;
                     for (int ch = 0; ch < 2 + Game1.random.Next(3); ch++)
                     {
@@ -2048,12 +2067,50 @@ public sealed class ModEntry : Mod
                             MathF.Cos(chAngle) * chSpd,
                             MathF.Sin(chAngle) * chSpd - 2.5f);
                         this.itemWorld.Spawn(
-                            playerPos, chVel, chMat,
+                            strikePos, chVel, chMat,
                             ItemPhysicsShape.Circle,
                             shapeRadius: 4f,
                             visualSize:  3.5f + Game1.random.NextSingle() * 2.0f,
                             maxAgeTicks: 900);  // 15 s
                     }
+                }
+
+                // ── World object launch (non-mined rocks/ore veins fly off on sword/axe) ──
+                // Detect any physics-reactive object at the strike tile and send it flying.
+                this.TryLaunchWorldObjectAtTile(strikePos, facingOffset, tool);
+            }
+        }
+
+        // ── General hitstop for ANY object near the strike — not just stone/metal ─
+        // Even hitting a tree, NPC, or ordinary crate should produce at least a small
+        // freeze and recoil. Gate behind EnableToolCollisionHitstop.
+        if (this.config.EnableToolCollisionHitstop && this.config.EnableHitstopEffect)
+        {
+            var hitDir = player.FacingDirection switch
+            {
+                0 => new Vector2(0f, -1f),
+                1 => new Vector2(1f,  0f),
+                2 => new Vector2(0f,  1f),
+                3 => new Vector2(-1f, 0f),
+                _ => new Vector2(0f,  1f),
+            };
+            // A small general hitstop fires when any object/terrain/entity is in range
+            // (beyond the hard-surface check above).  Gives tactile response to every swing.
+            bool hasAnythingNear = this.DetectAnyObjectNear(player, strikePos);
+            if (hasAnythingNear)
+            {
+                // Soft hitstop (2 ticks) + tiny recoil — won't override larger hitstops
+                if (this.hitstopTicksRemaining < 2)
+                    this.hitstopTicksRemaining = 2;
+                Game1.flashAlpha = Math.Max(Game1.flashAlpha, 0.08f);
+
+                // Small body recoil even for soft surfaces
+                if (this.config.EnableBodyPhysics)
+                {
+                    var pKey = this.GetCharacterKey(player);
+                    var recoil = -hitDir * 0.08f;
+                    var existing = this.bodyImpulse.TryGetValue(pKey, out var bi) ? bi : Vector2.Zero;
+                    this.bodyImpulse[pKey] = existing + recoil;
                 }
             }
         }
@@ -2064,12 +2121,13 @@ public sealed class ModEntry : Mod
             var hitWood = this.DetectWoodSurfaceNear(player);
             if (hitWood)
             {
-                this.ApplyWoodShatterVfx(playerPos);
+                // Spawn wood particles at the actual strike location, not player feet
+                this.ApplyWoodShatterVfx(strikePos);
 
                 // Swing-stop: tool hits wood = brief hitstop (wood absorbs impact)
                 if (this.config.EnableToolCollisionHitstop)
                 {
-                    var woodHitDir = Game1.player.FacingDirection switch
+                    var woodHitDir = player.FacingDirection switch
                     {
                         0 => new Vector2(0f, -1f),
                         1 => new Vector2(1f,  0f),
@@ -2082,11 +2140,11 @@ public sealed class ModEntry : Mod
                     this.ApplyHitContactFeedback(player, null, in woodContact, woodProfile);
                 }
 
-                // Typed wood debris — splinters and sawdust that arc outward and scatter
+                // Typed wood debris at the STRUCK SURFACE, not the player
                 if (this.config.EnableTypedPhysicsDebris)
                 {
-                    this.SpawnTypedDebris(playerPos, PhysicsParticleKind.WoodSplinter, 3 + Game1.random.Next(4), 1.3f);
-                    this.SpawnTypedDebris(playerPos, PhysicsParticleKind.Sawdust,      5 + Game1.random.Next(5), 0.7f);
+                    this.SpawnTypedDebris(strikePos, PhysicsParticleKind.WoodSplinter, 3 + Game1.random.Next(4), 1.3f);
+                    this.SpawnTypedDebris(strikePos, PhysicsParticleKind.Sawdust,      5 + Game1.random.Next(5), 0.7f);
                 }
             }
         }
@@ -2178,7 +2236,139 @@ public sealed class ModEntry : Mod
         return false;
     }
 
-    private IEnumerable<Character> EnumerateHumanoids(GameLocation location)
+    /// <summary>
+    /// Returns true when ANY object, terrain feature, character, or furniture is present
+    /// within ~1 tile of <paramref name="strikePos"/>.  Used for the broad "soft hitstop"
+    /// that fires on every tool swing that hits something.
+    /// </summary>
+    private bool DetectAnyObjectNear(Farmer player, Vector2 strikePos)
+    {
+        if (Game1.currentLocation is null) return false;
+
+        var checkTile = new Vector2((int)(strikePos.X / 64), (int)(strikePos.Y / 64));
+
+        // Any object on the facing tile
+        if (Game1.currentLocation.objects.TryGetValue(checkTile, out _))
+            return true;
+
+        // Any terrain feature (tree, grass, hoeDirt, flooring, etc.)
+        if (Game1.currentLocation.terrainFeatures.TryGetValue(checkTile, out _))
+            return true;
+
+        // Any resource clump
+        foreach (var clump in Game1.currentLocation.resourceClumps)
+        {
+            if (Vector2.Distance(clump.Tile * 64f, strikePos) < 96f)
+                return true;
+        }
+
+        // Any NPC / monster within swing range
+        foreach (var npc in Game1.currentLocation.characters)
+        {
+            if (Vector2.Distance(npc.Position, strikePos) < 80f)
+                return true;
+        }
+
+        // Any furniture
+        foreach (var fur in Game1.currentLocation.furniture)
+        {
+            if (fur is null) continue;
+            if (Vector2.Distance(fur.TileLocation * 64f, strikePos) < 96f)
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// When a world object (stone, ore vein, twig, stick, branch, crate, barrel) is at the
+    /// strike tile and the player hits it with a sword/axe/pickaxe, spawn a burst of
+    /// ItemPhysics chunks flying in the hit direction so the object appears to fly off.
+    /// This is purely cosmetic — the game already handles item removal separately.
+    /// </summary>
+    private void TryLaunchWorldObjectAtTile(Vector2 strikePos, Vector2 facingOffset, Tool tool)
+    {
+        if (!this.config.EnableTypedPhysicsDebris) return;
+        if (Game1.currentLocation is null) return;
+
+        var tileKey = new Vector2((int)(strikePos.X / 64), (int)(strikePos.Y / 64));
+        if (!Game1.currentLocation.objects.TryGetValue(tileKey, out var obj)) return;
+        if (obj is null) return;
+
+        var name = obj.Name ?? string.Empty;
+
+        // Determine material from name keywords
+        ItemPhysicsMaterial mat;
+        PhysicsParticleKind kind;
+        float launchSpeed;
+        int count;
+
+        if (ContainsAny(name, "stone", "rock", "boulder", "cobblestone", "geode"))
+        {
+            mat = ItemPhysicsMaterial.Stone;
+            kind = PhysicsParticleKind.StoneChunk;
+            launchSpeed = 2.5f;
+            count = 3 + Game1.random.Next(3);
+        }
+        else if (ContainsAny(name, "ore", "iron", "copper", "gold", "iridium", "coal", "radioactive"))
+        {
+            mat = ItemPhysicsMaterial.Ore;
+            kind = PhysicsParticleKind.OreChunk;
+            launchSpeed = 2.2f;
+            count = 2 + Game1.random.Next(3);
+        }
+        else if (ContainsAny(name, "gem", "diamond", "ruby", "emerald", "aquamarine", "topaz", "amethyst", "crystal"))
+        {
+            mat = ItemPhysicsMaterial.Gem;
+            kind = PhysicsParticleKind.GemChunk;
+            launchSpeed = 3.0f;
+            count = 2 + Game1.random.Next(3);
+        }
+        else if (ContainsAny(name, "wood", "twig", "stick", "branch", "log", "stump", "crate", "barrel",
+                                     "fence", "tree", "hardwood"))
+        {
+            mat = ItemPhysicsMaterial.Wood;
+            kind = PhysicsParticleKind.WoodSplinter;
+            launchSpeed = 2.0f;
+            count = 3 + Game1.random.Next(3);
+        }
+        else
+        {
+            // Unknown material: small generic stone chunk burst
+            mat = ItemPhysicsMaterial.Stone;
+            kind = PhysicsParticleKind.StoneChunk;
+            launchSpeed = 1.5f;
+            count = 2;
+        }
+
+        // Base launch direction: away from player (same as hit direction) with some spread
+        var baseDir = Vector2.Normalize(facingOffset);
+        if (float.IsNaN(baseDir.X)) baseDir = new Vector2(0f, -1f);
+
+        // Typed VFX particles at strike point
+        this.SpawnTypedDebris(strikePos, kind, count, launchSpeed * 0.6f);
+
+        // Persistent ItemPhysics chunks that arc and land
+        for (int i = 0; i < 2 + Game1.random.Next(2); i++)
+        {
+            // Spread ±45° around the base hit direction
+            var spread   = (Game1.random.NextSingle() - 0.5f) * MathF.PI * 0.5f;
+            var cos      = MathF.Cos(spread);
+            var sin      = MathF.Sin(spread);
+            var chDir    = new Vector2(
+                baseDir.X * cos - baseDir.Y * sin,
+                baseDir.X * sin + baseDir.Y * cos);
+            var spd      = launchSpeed * (0.8f + Game1.random.NextSingle() * 0.6f);
+            var chVel    = chDir * spd + new Vector2(0f, -2.0f); // upward arc component
+
+            this.itemWorld.Spawn(
+                strikePos, chVel, mat,
+                ItemPhysicsShape.Circle,
+                shapeRadius: 3.5f,
+                visualSize:  3.0f + Game1.random.NextSingle() * 2.0f,
+                maxAgeTicks: 800);
+        }
+    }
     {
         if (Game1.player is not null)
         {

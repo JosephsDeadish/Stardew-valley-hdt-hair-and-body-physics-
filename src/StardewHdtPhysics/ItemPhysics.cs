@@ -174,6 +174,22 @@ public sealed class ItemPhysicsState
     public bool HasBounced;
     public bool IsBroken;
 
+    // ── Floor plane ───────────────────────────────────────────────────────────
+    /// <summary>
+    /// Virtual ground Y for this item. Set at spawn to approximately where the floor is.
+    /// 0 = unset (fall back to legacy velocity-threshold bounce).
+    /// </summary>
+    public float GroundY;
+
+    /// <summary>
+    /// Number of bounces performed off <see cref="GroundY"/>.
+    /// After <see cref="MaxBounces"/> the item slides to rest.
+    /// </summary>
+    public int BounceCount;
+
+    /// <summary>Maximum ground bounces before the item rests.</summary>
+    public const int MaxBounces = 4;
+
     // ── LOD ───────────────────────────────────────────────────────────────────
     /// <summary>Distance to the player, updated each world step.</summary>
     public float DistToPlayer;
@@ -272,6 +288,19 @@ public sealed class ItemPhysicsWorld
         if (list.Count >= cap)
             list.RemoveAt(0);
 
+        // Per-material drop height from spawn point to virtual floor
+        var dropH = (ItemPhysicsMaterial)mi switch
+        {
+            ItemPhysicsMaterial.Stone => 38f,
+            ItemPhysicsMaterial.Metal => 35f,
+            ItemPhysicsMaterial.Wood  => 45f,
+            ItemPhysicsMaterial.Cloth => 22f,
+            ItemPhysicsMaterial.Glass => 30f,
+            ItemPhysicsMaterial.Gem   => 32f,
+            ItemPhysicsMaterial.Ore   => 36f,
+            _                         => 36f,
+        };
+
         // Clamp initial velocity for Euler stability
         var velSq = velocity.LengthSquared();
         if (velSq > MaxInitialVelSq)
@@ -287,6 +316,7 @@ public sealed class ItemPhysicsWorld
             ShapeRadius      = shapeRadius,
             VisualSize       = visualSize,
             MaxAgeTicks      = maxAgeTicks,
+            GroundY          = position.Y + dropH,
         });
     }
 
@@ -400,23 +430,44 @@ public sealed class ItemPhysicsWorld
                 if (item.Velocity.Y < props.TerminalVelocity)
                     item.Velocity.Y = MathF.Min(item.Velocity.Y + props.Gravity, props.TerminalVelocity);
 
-                // ── One-time bounce (when falling speed crosses threshold) ──
-                if (!item.HasBounced && item.AgeTicks > 8 && item.Velocity.Y > 1.8f)
+                // ── Ground-plane bounce (multi-bounce with energy loss) ──────
+                // Use GroundY if set; fall back to legacy velocity-threshold for old items.
+                bool hitGround = item.GroundY > 0f
+                    ? item.Position.Y >= item.GroundY && item.Velocity.Y > 0f
+                    : (!item.HasBounced && item.AgeTicks > 8 && item.Velocity.Y > 1.8f);
+
+                if (hitGround)
                 {
+                    if (item.GroundY > 0f)
+                        item.Position.Y = item.GroundY; // clamp to floor
+
+                    item.BounceCount++;
+                    item.HasBounced = true;
+
                     var impactSpeed = MathF.Abs(item.Velocity.Y);
-                    item.Velocity.Y       *= -props.BounceCoeff;
+
+                    // Energy loss increases each bounce
+                    var bc = props.BounceCoeff * MathF.Pow(0.60f, item.BounceCount - 1);
+                    item.Velocity.Y       *= -bc;
                     item.Velocity.X       *= (1f - props.Friction);
                     item.RotationVelocity *= 1.3f;
-                    item.HasBounced        = true;
 
-                    // Break check — hard impact shatters fragile materials
-                    if (impactSpeed >= props.BreakSpeed)
+                    // Break check — hard impact shatters fragile materials (only on first bounce)
+                    if (item.BounceCount == 1 && impactSpeed >= props.BreakSpeed)
                     {
                         item.IsBroken = true;
                         _breakQueue.Enqueue(new ItemPhysicsBreakEvent(
                             item.Position, props.DebrisKind, props.DebrisCount));
                         list.RemoveAt(i);
                         continue;
+                    }
+
+                    // Sleep after MaxBounces or when bounce height is too small
+                    if (item.BounceCount >= ItemPhysicsState.MaxBounces
+                        || MathF.Abs(item.Velocity.Y) < 0.5f)
+                    {
+                        item.Velocity.Y = 0f;
+                        // Let sleep detection below handle IsAsleep transition
                     }
                 }
 
