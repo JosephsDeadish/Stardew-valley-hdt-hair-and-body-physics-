@@ -9,8 +9,7 @@ name: Build and Release
 # Required repository secrets (Settings → Secrets and variables → Actions):
 #   STEAM_USERNAME   — your Steam account username
 #   STEAM_PASSWORD   — your Steam account password
-#   (The account must own Stardew Valley; 2-FA must be disabled or use a
-#    Steam Guard mobile code stored in STEAM_GUARD_CODE if needed.)
+#   (The account must own Stardew Valley; Steam Guard / 2FA must be disabled.)
 # ──────────────────────────────────────────────────────────────────────────────
 
 on:
@@ -50,77 +49,51 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      # ── 3. SteamCMD + Stardew Valley ─────────────────────────────────────────
-      - name: Cache Stardew Valley game files
+      # ── 3. Stardew Valley DLLs (compile references only) ─────────────────────
+      # DepotDownloader is a .NET tool that speaks the Steam protocol directly.
+      # Unlike SteamCMD it does not require a self-bootstrapping package, so it
+      # works reliably on GitHub-hosted runners.  We use -filelist to fetch only
+      # the *.dll files (~few MB) rather than the full ~3 GB game install.
+      - name: Cache Stardew Valley game DLLs
         id: cache-stardew
         uses: actions/cache@v4
         with:
           path: ~/stardew
-          key: stardew-valley-linux-${{ runner.os }}-v1
+          key: stardew-valley-linux-${{ runner.os }}-v2
 
-      - name: Install SteamCMD
-        run: |
-          for attempt in 1 2 3; do
-            echo "Attempt $attempt to install SteamCMD..."
-            sudo apt-get update -qq && \
-            sudo apt-get install -y --no-install-recommends \
-              lib32gcc-s1 \
-              lib32stdc++6 \
-              libc6-i386 && \
-            sudo mkdir -p /usr/games && \
-            curl -sqL "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz" \
-              | sudo tar xz -C /usr/games && \
-            sudo chmod +x /usr/games/steamcmd.sh && \
-            sudo chmod +x /usr/games/linux32/steamcmd && \
-            echo "SteamCMD installed at /usr/games/steamcmd.sh" && \
-            break || sleep 10
-          done
+      - name: Install DepotDownloader
+        if: steps.cache-stardew.outputs.cache-hit != 'true'
+        run: dotnet tool install -g DepotDownloader --version 2.7.4
 
-      - name: Download Stardew Valley via SteamCMD
+      - name: Download Stardew Valley DLLs via DepotDownloader
         if: steps.cache-stardew.outputs.cache-hit != 'true'
         env:
           STEAM_USER: ${{ secrets.STEAM_USERNAME }}
           STEAM_PASS: ${{ secrets.STEAM_PASSWORD }}
-          STEAM_GUARD: ${{ secrets.STEAM_GUARD_CODE }}
         run: |
-          # AppID 413150 = Stardew Valley (Linux depot 413153)
+          # AppID 413150 = Stardew Valley, depot 413153 = Linux
           STARDEW_DIR="$HOME/stardew"
           mkdir -p "$STARDEW_DIR"
 
-          for attempt in 1 2 3 4 5; do
-            echo "Attempt $attempt to download Stardew Valley..."
+          # Only download *.dll files — that is all the compiler needs.
+          printf 'regex:.*\\.dll$\n' > /tmp/stardew-filelist.txt
 
-            # Clean SteamCMD cache to avoid corrupted bootstrap state
-            rm -rf "$HOME/.steamcmd" 2>/dev/null || true
-
-            WAIT_TIME=$((2 ** (attempt - 1)))
-
-            if [ -n "${STEAM_GUARD:-}" ]; then
-              /usr/games/steamcmd.sh \
-                +@sSteamCmdForcePlatformType linux \
-                +@sSteamCmdForcePlatformBitness 32 \
-                +login "$STEAM_USER" "$STEAM_PASS" "$STEAM_GUARD" \
-                +force_install_dir "$STARDEW_DIR" \
-                +app_update 413150 validate \
-                +quit && DOWNLOAD_SUCCESS=1 && break
-            else
-              /usr/games/steamcmd.sh \
-                +@sSteamCmdForcePlatformType linux \
-                +@sSteamCmdForcePlatformBitness 32 \
-                +login "$STEAM_USER" "$STEAM_PASS" \
-                +force_install_dir "$STARDEW_DIR" \
-                +app_update 413150 validate \
-                +quit && DOWNLOAD_SUCCESS=1 && break
-            fi
-
-            if [ $attempt -lt 5 ]; then
-              echo "Download attempt $attempt failed. Waiting ${WAIT_TIME}s before retry..."
-              sleep $WAIT_TIME
-            fi
+          for attempt in 1 2 3; do
+            echo "Attempt $attempt to download Stardew Valley DLLs..."
+            ~/.dotnet/tools/depotdownloader \
+              -app 413150 \
+              -depot 413153 \
+              -os linux \
+              -username "$STEAM_USER" \
+              -password "$STEAM_PASS" \
+              -dir "$STARDEW_DIR" \
+              -filelist /tmp/stardew-filelist.txt \
+              && DOWNLOAD_SUCCESS=1 && break
+            [ $attempt -lt 3 ] && echo "Attempt $attempt failed, retrying in $((attempt * 10))s..." && sleep $((attempt * 10))
           done
 
           if [ "${DOWNLOAD_SUCCESS:-}" != "1" ]; then
-            echo "ERROR: Failed to download Stardew Valley after 5 attempts"
+            echo "ERROR: Failed to download Stardew Valley DLLs after 3 attempts"
             exit 1
           fi
 
