@@ -76,6 +76,19 @@ public sealed class ModEntry : Mod
     private readonly List<TypedPhysicsParticle> typedParticles = new();
     private const int MaxTypedParticles = 300;
 
+    // Per-kind particle budget: any one material cannot flood the global cap and
+    // evict particles from other buckets (e.g. tree-fall sawdust evicting gems).
+    // Order matches PhysicsParticleKind enum: WoodSplinter=0 Sawdust=1 Stone=2 Ore=3 Gem=4.
+    private static readonly int[] KindParticleCap = { 70, 90, 50, 50, 40 };
+
+    // ── ItemPhysics world (persistent rigid debris with sleep/LOD/break/per-bucket cap) ──
+    /// <summary>
+    /// Simulation layer for world-persistent physics items (ore chunks, gem shards, log pieces).
+    /// Complements TypedPhysicsParticle (pure VFX) with a richer state model:
+    /// sleep/wake, distance LOD, per-material bounce/friction, and break thresholds.
+    /// </summary>
+    private readonly ItemPhysicsWorld itemWorld = new();
+
     /// 1×1 white Texture2D for particle rendering (lazily created on first use).
     private Texture2D? pixelTexture;
 
@@ -366,11 +379,7 @@ public sealed class ModEntry : Mod
     /// </summary>
     private void OnRenderedWorld(object? sender, RenderedWorldEventArgs e)
     {
-        if (this.savedPhysicsPositions.Count == 0)
-        {
-            return;
-        }
-
+        // Restore all temporarily-displaced character positions
         foreach (var kv in this.savedPhysicsPositions)
         {
             kv.Key.Position = kv.Value;
@@ -378,10 +387,18 @@ public sealed class ModEntry : Mod
 
         this.savedPhysicsPositions.Clear();
 
-        // Draw typed physics debris particles on top of restored world geometry.
-        if (this.config.EnableTypedPhysicsDebris && this.typedParticles.Count > 0)
+        if (!this.config.EnableTypedPhysicsDebris) return;
+
+        // Draw typed physics VFX particles on top of restored world geometry.
+        if (this.typedParticles.Count > 0)
         {
             this.RenderTypedParticles(e.SpriteBatch);
+        }
+
+        // Draw ItemPhysics world items (persistent rigid debris: ore/gem/wood chunks).
+        if (this.itemWorld.TotalCount > 0)
+        {
+            this.RenderItemPhysics(e.SpriteBatch);
         }
     }
 
@@ -708,6 +725,19 @@ public sealed class ModEntry : Mod
             this.StepTypedParticles(location);
         }
 
+        // ── ItemPhysics world — persistent rigid debris (sleep/LOD/break events)
+        if (this.config.EnableTypedPhysicsDebris)
+        {
+            var ipPos = Game1.player?.Position ?? Vector2.Zero;
+            this.itemWorld.Step(ipPos, this.config.TypedDebrisScatterStrength);
+
+            // Convert break events into VFX typed-particle bursts
+            while (this.itemWorld.TryPopBreakEvent(out var breakEvt))
+            {
+                this.SpawnTypedDebris(breakEvt.Position, breakEvt.DebrisKind, breakEvt.Count, 1.0f);
+            }
+        }
+
         // ── Tree-fell detection — every 3 ticks (trees don't fall sub-tick)
         if (this.config.EnableTypedPhysicsDebris && e.IsMultipleOf(3))
         {
@@ -873,6 +903,7 @@ public sealed class ModEntry : Mod
         this.wasFishBiting = false;
         this.wasFishCaught = false;
         this.typedParticles.Clear();
+        this.itemWorld.Clear();
         this.prevTreeTiles.Clear();
     }
 
@@ -1597,6 +1628,25 @@ public sealed class ModEntry : Mod
                     var stoneKind = (tool is Pickaxe) ? PhysicsParticleKind.StoneChunk : PhysicsParticleKind.OreChunk;
                     this.SpawnTypedDebris(playerPos, stoneKind,               3 + Game1.random.Next(4), 1.5f);
                     this.SpawnTypedDebris(playerPos, PhysicsParticleKind.Sawdust, 4 + Game1.random.Next(5), 0.7f);
+
+                    // Persistent ItemPhysics chunks: 2–4 heavy pieces that arc, bounce,
+                    // then sleep on the ground.  They outlive VFX particles and react to
+                    // walk-scatter.  Material matched to pickaxe vs other tools.
+                    var chMat = (tool is Pickaxe) ? ItemPhysicsMaterial.Stone : ItemPhysicsMaterial.Ore;
+                    for (int ch = 0; ch < 2 + Game1.random.Next(3); ch++)
+                    {
+                        var chAngle = Game1.random.NextSingle() * MathF.PI * 2f;
+                        var chSpd   = 1.8f + Game1.random.NextSingle() * 3.5f;
+                        var chVel   = new Vector2(
+                            MathF.Cos(chAngle) * chSpd,
+                            MathF.Sin(chAngle) * chSpd - 2.5f);
+                        this.itemWorld.Spawn(
+                            playerPos, chVel, chMat,
+                            ItemPhysicsShape.Circle,
+                            shapeRadius: 4f,
+                            visualSize:  3.5f + Game1.random.NextSingle() * 2.0f,
+                            maxAgeTicks: 900);  // 15 s
+                    }
                 }
             }
         }
@@ -4277,9 +4327,34 @@ public sealed class ModEntry : Mod
 
         for (int i = 0; i < count; i++)
         {
+            // Per-kind cap: evict the oldest particle of the same kind before adding a new one.
+            // This prevents any single material (e.g. tree-fall sawdust) from monopolising the
+            // global MaxTypedParticles budget and evicting particles from other kinds (gems, ore).
+            var kindIdx = (int)kind;
+            if (kindIdx >= 0 && kindIdx < KindParticleCap.Length)
+            {
+                var kindCap   = KindParticleCap[kindIdx];
+                var kindCount = 0;
+                for (int ki = 0; ki < this.typedParticles.Count; ki++)
+                    if (this.typedParticles[ki].Kind == kind) kindCount++;
+
+                if (kindCount >= kindCap)
+                {
+                    for (int ki = 0; ki < this.typedParticles.Count; ki++)
+                    {
+                        if (this.typedParticles[ki].Kind == kind)
+                        {
+                            this.typedParticles.RemoveAt(ki);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Global safety cap: evict oldest entry of any kind if still over limit
             if (this.typedParticles.Count >= MaxTypedParticles)
             {
-                this.typedParticles.RemoveAt(0); // evict oldest
+                this.typedParticles.RemoveAt(0);
             }
 
             var angle = Game1.random.NextSingle() * MathF.PI * 2f;
@@ -4445,6 +4520,25 @@ public sealed class ModEntry : Mod
             // Sawdust cloud scattered widely
             this.SpawnTypedDebris(worldPos, PhysicsParticleKind.Sawdust,      14 + Game1.random.Next(8), 1.6f);
 
+            // Persistent ItemPhysics wood chunks: heavier pieces that bounce, settle on the
+            // ground, sleep, and can be kicked around (tree falls → 4–7 chunks).
+            for (int ch = 0; ch < 4 + Game1.random.Next(4); ch++)
+            {
+                var chAngle = Game1.random.NextSingle() * MathF.PI * 2f;
+                var chSpd   = 1.5f + Game1.random.NextSingle() * 3.0f;
+                var chVel   = new Vector2(
+                    MathF.Cos(chAngle) * chSpd,
+                    MathF.Sin(chAngle) * chSpd - 2.0f);  // upward bias
+                this.itemWorld.Spawn(
+                    worldPos,
+                    chVel,
+                    ItemPhysicsMaterial.Wood,
+                    ItemPhysicsShape.Box,
+                    shapeRadius: 5f,
+                    visualSize:  4.0f + Game1.random.NextSingle() * 2.5f,
+                    maxAgeTicks: 1200);  // 20 s
+            }
+
             // Player body/hair impulse to simulate ground-thud camera shake
             if (this.config.EnableTreeFallImpulse && Game1.player != null)
             {
@@ -4546,6 +4640,78 @@ public sealed class ModEntry : Mod
     }
 
 
+
+    /// <summary>
+    /// Render all live <see cref="ItemPhysicsState"/> items from the <see cref="ItemPhysicsWorld"/>
+    /// as small coloured quads.  Sleeping items draw at half alpha to show they have settled.
+    /// The pixel texture is shared with <see cref="RenderTypedParticles"/>.
+    /// </summary>
+    private void RenderItemPhysics(SpriteBatch sb)
+    {
+        if (this.pixelTexture is null || this.pixelTexture.IsDisposed)
+        {
+            if (Game1.graphics?.GraphicsDevice is null) return;
+            this.pixelTexture = new Texture2D(Game1.graphics.GraphicsDevice, 1, 1);
+            this.pixelTexture.SetData(new[] { Color.White });
+        }
+
+        var zoom = Game1.options.zoomLevel;
+
+        // Iterate over every material bucket (0..6, matches ItemPhysicsMaterial enum order)
+        for (int mi = 0; mi < 7; mi++)
+        {
+            var mat    = (ItemPhysicsMaterial)mi;
+            var bucket = this.itemWorld.GetBucket(mat);
+            if (bucket.Count == 0) continue;
+
+            // Base colour per material — aligned with TypedPhysicsParticle colours
+            var (r, g, b, maxA) = mat switch
+            {
+                ItemPhysicsMaterial.Stone => (130, 130, 130, 240),
+                ItemPhysicsMaterial.Metal => (160, 160, 175, 240),
+                ItemPhysicsMaterial.Wood  => (139,  90,  43, 220),
+                ItemPhysicsMaterial.Cloth => (210, 180, 140, 160),
+                ItemPhysicsMaterial.Glass => (180, 230, 255, 230),
+                ItemPhysicsMaterial.Gem   => (100, 200, 255, 255),
+                ItemPhysicsMaterial.Ore   => (184, 115,  51, 240),
+                _                         => (180, 180, 180, 200),
+            };
+
+            foreach (var item in bucket)
+            {
+                if (!item.IsAlive || item.IsBroken) continue;
+
+                // Sleeping items draw at 60 % alpha (visually "settled")
+                var alphaScale = item.IsAsleep ? 0.60f : 1.0f;
+
+                // Mortal items fade over last 25 % of lifetime
+                if (item.MaxAgeTicks > 0)
+                {
+                    var lifeRatio = (float)item.AgeTicks / item.MaxAgeTicks;
+                    if (lifeRatio > 0.75f)
+                        alphaScale *= (1f - lifeRatio) / 0.25f;
+                }
+
+                alphaScale = Math.Clamp(alphaScale, 0f, 1f);
+                var a = (int)(maxA * alphaScale);
+                if (a < 4) continue;
+
+                var color     = new Color(r, g, b, a);
+                var screenPos = Game1.GlobalToLocal(Game1.viewport, item.Position);
+
+                sb.Draw(
+                    this.pixelTexture,
+                    screenPos,
+                    null,
+                    color,
+                    item.Rotation,
+                    new Vector2(0.5f, 0.5f),
+                    item.VisualSize * zoom,
+                    SpriteEffects.None,
+                    0.90f);
+            }
+        }
+    }
 
     /// <summary>
     /// While the farmer is riding a horse, apply extra vertical bounce from hoofbeats.

@@ -39,6 +39,13 @@ public struct BoneState
     /// </param>
     /// <param name="stiffness">Spring constant k. Higher = snappier return. Typical 0.08–0.30.</param>
     /// <param name="damping">Damping coefficient c. Higher = less oscillation. Typical 0.06–0.20.</param>
+    // Euler stability bounds (spring-unit space, before PhysicsVisualScale).
+    // Velocity cap: 2.5 units/tick ≈ 25 px at scale-10 — prevents runaway oscillation
+    // when stiffness is high or many chain segments accumulate energy.
+    // Displacement cap: 4.0 units ≈ 40 px — stops positional explosion on long chains.
+    private const float MaxVelSq  = 2.5f * 2.5f;
+    private const float MaxDisplSq = 4.0f * 4.0f;
+
     public void Step(Vector2 externalForce, float stiffness, float damping)
     {
         // Spring restoring force + viscous damping
@@ -47,6 +54,15 @@ public struct BoneState
 
         Velocity += externalForce + restoreForce + dampForce;
         Position += Velocity;
+
+        // ── Euler stability clamps ────────────────────────────────────────────
+        var velSq = Velocity.LengthSquared();
+        if (velSq > MaxVelSq)
+            Velocity *= 2.5f / MathF.Sqrt(velSq);
+
+        var posSq = Position.LengthSquared();
+        if (posSq > MaxDisplSq)
+            Position *= 4.0f / MathF.Sqrt(posSq);
     }
 
     /// <summary>
