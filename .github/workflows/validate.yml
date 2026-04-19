@@ -58,6 +58,19 @@ jobs:
       # ── Validate all asset JSON files ────────────────────────────────────────
       - name: Validate asset JSON files
         run: |
+          # Helper: strip // line comments before parsing (SMAPI supports them,
+          # but Python's json module does not).
+          strip_and_parse() {
+            python3 - "$1" <<'PYEOF'
+          import sys, re, json
+          text = open(sys.argv[1], encoding="utf-8").read()
+          # Remove // … comments that are not inside a string literal.
+          # Simple approach: strip from // to end-of-line when not preceded by http(s):
+          text = re.sub(r'(?<!:)//[^\n]*', '', text)
+          json.loads(text)
+          print("  OK")
+          PYEOF
+          }
           for f in \
             "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/presets.json" \
             "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/spriteProfiles.json" \
@@ -66,7 +79,7 @@ jobs:
             "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/creatureProfiles.json"
           do
             echo "Checking $f ..."
-            python3 -c "import json; json.load(open('$f')); print('  OK')"
+            strip_and_parse "$f"
           done
 
       # ── Check required files exist in the installable mod folder ─────────────
