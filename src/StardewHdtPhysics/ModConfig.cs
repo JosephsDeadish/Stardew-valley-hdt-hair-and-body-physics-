@@ -152,6 +152,81 @@ public sealed class ModConfig
     /// </summary>
     public float ClothingFlowStrength { get; set; } = 1.0f;
 
+    // ── Wood shatter VFX ──────────────────────────────────────────────────────
+    /// <summary>
+    /// Wood splinter/shatter particle effect when axe or sword hits a wooden surface
+    /// (trees, fences, wood furniture, stumps, crates).
+    /// Toggle off for a cleaner visual experience.
+    /// </summary>
+    public bool EnableWoodShatterEffects { get; set; } = true;
+    /// <summary>
+    /// Intensity multiplier for wood shatter particle count.
+    /// 0 = off, 1 = default (4–8 splinters), 2 = dramatic chunk shower.
+    /// </summary>
+    public float WoodShatterIntensity { get; set; } = 1.0f;
+
+    // ── Wing physics ──────────────────────────────────────────────────────────
+    /// <summary>
+    /// Multi-bone wing physics for all winged creatures: bats, dragons, flying bugs, butterflies,
+    /// birds, and any modded flying creature. Each wing has 4 spring bones (root→inner→outer→tip)
+    /// producing a realistic fold/unfold wave on every wingbeat.
+    /// </summary>
+    public bool EnableWingPhysics { get; set; } = true;
+    /// <summary>Wing spring stiffness. Lower = floppy membrane wings (bat). Higher = rigid feathered wings (bird).</summary>
+    public float WingChainStiffness { get; set; } = 0.09f;
+    /// <summary>Wing chain damping. Lower = more wing flutter cycles. Higher = quick settle.</summary>
+    public float WingChainDamping { get; set; } = 0.08f;
+
+    // ── Fur physics ───────────────────────────────────────────────────────────
+    /// <summary>
+    /// Surface fur ripple chain for all furry creatures: wolves, bears, cats, dogs, foxes,
+    /// sheep, rabbits, and any modded furry creature or farm animal. Fur ripples as the
+    /// creature moves and settles with a gentle wave when it stops.
+    /// </summary>
+    public bool EnableFurPhysics { get; set; } = true;
+    /// <summary>Number of fur chain segments (2–6). More segments = smoother ripple wave.</summary>
+    public int FurChainSegments { get; set; } = 3;
+    /// <summary>Fur chain spring stiffness. Lower = very fluffy loose fur. Higher = tight smooth coat.</summary>
+    public float FurChainStiffness { get; set; } = 0.14f;
+    /// <summary>Fur chain damping.</summary>
+    public float FurChainDamping { get; set; } = 0.10f;
+
+    // ── Tail physics ──────────────────────────────────────────────────────────
+    /// <summary>
+    /// Multi-bone tail chain for all tailed creatures: wolves, cats, dogs, dragons,
+    /// foxes, cows, horses, pigs, and any modded tailed creature or farm animal.
+    /// Tail wags side-to-side and the tip lags the base with spring-damper lag.
+    /// </summary>
+    public bool EnableTailPhysics { get; set; } = true;
+    /// <summary>Number of tail chain segments (2–6). Default 4: root→mid1→mid2→tip.</summary>
+    public int TailChainSegments { get; set; } = 4;
+    /// <summary>Tail spring stiffness. Lower = whippy serpentine tail. Higher = stiff stubby tail.</summary>
+    public float TailChainStiffness { get; set; } = 0.11f;
+    /// <summary>Tail chain damping.</summary>
+    public float TailChainDamping { get; set; } = 0.09f;
+
+    // ── Animal bone physics ───────────────────────────────────────────────────
+    /// <summary>
+    /// Per-animal spring bone set (ears, snout, body) for all farm animals.
+    /// Rabbit ears flop independently, chicken combs bob on pecks, cow ears flick,
+    /// pig snouts bob on sniffs. All controlled by anatomically correct spring constants.
+    /// </summary>
+    public bool EnableAnimalBonePhysics { get; set; } = true;
+    /// <summary>Overall strength multiplier for animal bone physics. 0 = off, 1 = default, 2 = maximum.</summary>
+    public float AnimalBoneStrength { get; set; } = 0.55f;
+
+    // ── Furniture collision physics ───────────────────────────────────────────
+    /// <summary>
+    /// When the player walks into or swings a tool at furniture/objects, they produce a spring
+    /// recoil — the object appears to shift slightly then spring back. Also triggers wood shatter
+    /// VFX on wood furniture when struck with an axe or sword.
+    /// </summary>
+    public bool EnableFurnitureCollisionPhysics { get; set; } = true;
+    /// <summary>Overall strength of furniture collision spring recoil.</summary>
+    public float FurnitureCollisionStrength { get; set; } = 0.45f;
+
+    // ── Wood shatter VFX ──────────────────────────────────────────────────────
+
     // ── Idle motion ───────────────────────────────────────────────────────────
     /// <summary>
     /// Ticks between idle physics bursts (body sways, leans, stretches). Default 90 = ~1.5 seconds.

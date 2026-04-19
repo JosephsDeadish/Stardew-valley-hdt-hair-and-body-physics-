@@ -24,8 +24,13 @@ public sealed class ModEntry : Mod
     private readonly List<DebrisWeightRule> debrisWeightRules = new();
 
     // ── Per-bone spring state (real spring-damper per body part) ──────────────
-    private readonly Dictionary<int, BoneGroup> boneGroups   = new();
-    private readonly Dictionary<int, HairChain> hairChains   = new();
+    private readonly Dictionary<int, BoneGroup>       boneGroups   = new();
+    private readonly Dictionary<int, HairChain>       hairChains   = new();
+    // ── Wing / Fur / Tail / Animal bones ──────────────────────────────────────
+    private readonly Dictionary<int, WingPair>        wingPairs    = new();
+    private readonly Dictionary<int, FurChain>        furChains    = new();
+    private readonly Dictionary<int, TailChain>       tailChains   = new();
+    private readonly Dictionary<int, AnimalBoneGroup> animalBones  = new();
 
     // ── Environmental physics state ───────────────────────────────────────────
     private Vector2 grassBendDisplacement = Vector2.Zero;
@@ -154,11 +159,16 @@ public sealed class ModEntry : Mod
     private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
     {
         this.Monitor.Log("╔══════════════════════════════════════════════════════════════╗", LogLevel.Info);
-        this.Monitor.Log("║  SVP Physics, Collisions, Hitstops, Idles, Ragdolls — v0.5.0 ║", LogLevel.Info);
-        this.Monitor.Log("║  Spring-damper per-bone engine active.                       ║", LogLevel.Info);
+        this.Monitor.Log("║  SVP Physics, Collisions, Hitstops, Idles, Ragdolls — v0.6.0 ║", LogLevel.Info);
+        this.Monitor.Log("║  HDT wing/fur/tail chains + wood shatter VFX active.         ║", LogLevel.Info);
         this.Monitor.Log("╠══════════════════════════════════════════════════════════════╣", LogLevel.Info);
         this.Monitor.Log($"║  Body physics:           {(this.config.EnableBodyPhysics ? "ON " : "OFF")}", LogLevel.Info);
         this.Monitor.Log($"║  Hair physics (chain):   {(this.config.EnableHairPhysics ? "ON " : "OFF")} ({this.config.HairChainSegments} segments)", LogLevel.Info);
+        this.Monitor.Log($"║  Wing physics (4-bone):  {(this.config.EnableWingPhysics ? "ON " : "OFF")} stiff={this.config.WingChainStiffness:F2}", LogLevel.Info);
+        this.Monitor.Log($"║  Fur chain physics:      {(this.config.EnableFurPhysics ? "ON " : "OFF")} ({this.config.FurChainSegments} segments)", LogLevel.Info);
+        this.Monitor.Log($"║  Tail chain physics:     {(this.config.EnableTailPhysics ? "ON " : "OFF")} ({this.config.TailChainSegments} segments)", LogLevel.Info);
+        this.Monitor.Log($"║  Animal bone physics:    {(this.config.EnableAnimalBonePhysics ? "ON " : "OFF")}", LogLevel.Info);
+        this.Monitor.Log($"║  Wood shatter VFX:       {(this.config.EnableWoodShatterEffects ? "ON " : "OFF")}", LogLevel.Info);
         this.Monitor.Log($"║  Bone stiffness:         {this.config.BoneStiffness:F2}  damping: {this.config.BoneDamping:F2}", LogLevel.Info);
         this.Monitor.Log($"║  Clothing flow physics:  {(this.config.EnableClothingFlowPhysics ? "ON " : "OFF")}", LogLevel.Info);
         this.Monitor.Log($"║  Idle motion:            {(this.config.EnableIdleMotion ? "ON " : "OFF")} (interval: {this.config.IdleMotionIntervalTicks} ticks)", LogLevel.Info);
@@ -257,6 +267,73 @@ public sealed class ModEntry : Mod
 
             this.savedPhysicsPositions[character] = character.Position;
             character.Position += visualOffset;
+        }
+
+        // ── Monster wing/fur/tail render displacement ─────────────────────────
+        if (this.config.EnableMonsterBodyPhysics)
+        {
+            foreach (var monster in this.EnumerateMonsters(Game1.currentLocation))
+            {
+                var key     = this.GetCharacterKey(monster);
+                var impulse = this.monsterBodyImpulse.TryGetValue(key, out var mi) ? mi : Vector2.Zero;
+
+                Vector2 wingOff = Vector2.Zero;
+                if (this.wingPairs.TryGetValue(key, out var wp) && !wp.IsNearRest())
+                    wingOff = wp.GetVisualDisplacement() * 0.55f;
+
+                Vector2 furOff = Vector2.Zero;
+                if (this.furChains.TryGetValue(key, out var fc) && !fc.IsNearRest())
+                    furOff = fc.GetDisplacement() * 0.35f;
+
+                Vector2 tailOff = Vector2.Zero;
+                if (this.tailChains.TryGetValue(key, out var tc) && !tc.IsNearRest())
+                    tailOff = tc.GetTipDisplacement() * 0.30f;
+
+                var blendedM = impulse + wingOff + furOff + tailOff;
+                if (blendedM.LengthSquared() < 0.015f * 0.015f) continue;
+
+                var visOffM = new Vector2(
+                    Math.Clamp(blendedM.X * PhysicsVisualScale, -PhysicsVisualMaxPx, PhysicsVisualMaxPx),
+                    Math.Clamp(blendedM.Y * PhysicsVisualScale, -PhysicsVisualMaxPx, PhysicsVisualMaxPx));
+
+                this.savedPhysicsPositions[monster] = monster.Position;
+                monster.Position += visOffM;
+            }
+        }
+
+        // ── Farm animal bone/fur/tail render displacement ─────────────────────
+        if (this.config.EnableFarmAnimalPhysics)
+        {
+            foreach (var animal in EnumerateFarmAnimals(Game1.currentLocation))
+            {
+                var key     = this.GetCharacterKey(animal);
+                var impulse = this.bodyImpulse.TryGetValue(key, out var biA) ? biA : Vector2.Zero;
+
+                Vector2 boneOff = Vector2.Zero;
+                if (this.animalBones.TryGetValue(key, out var ab) && !ab.IsAllNearRest())
+                    boneOff = ab.GetVisualDisplacement() * this.config.AnimalBoneStrength;
+
+                Vector2 furOff = Vector2.Zero;
+                if (this.furChains.TryGetValue(key, out var fc2) && !fc2.IsNearRest())
+                    furOff = fc2.GetDisplacement() * 0.28f;
+
+                Vector2 tailOff = Vector2.Zero;
+                if (this.tailChains.TryGetValue(key, out var tc2) && !tc2.IsNearRest())
+                    tailOff = tc2.GetTipDisplacement() * 0.25f;
+
+                var blendedA = impulse + boneOff + furOff + tailOff;
+                if (blendedA.LengthSquared() < 0.015f * 0.015f) continue;
+
+                var visOffA = new Vector2(
+                    Math.Clamp(blendedA.X * PhysicsVisualScale, -PhysicsVisualMaxPx, PhysicsVisualMaxPx),
+                    Math.Clamp(blendedA.Y * PhysicsVisualScale, -PhysicsVisualMaxPx, PhysicsVisualMaxPx));
+
+                if (animal is Character animalChar)
+                {
+                    this.savedPhysicsPositions[animalChar] = animalChar.Position;
+                    animalChar.Position += visOffA;
+                }
+            }
         }
     }
 
@@ -493,6 +570,28 @@ public sealed class ModEntry : Mod
                     this.SimulateMonsterIdle(monster, archetype);
                 }
 
+                // Wing physics for flying archetypes (4-bone per-wing chain)
+                if (archetype == MonsterPhysicsArchetype.Bat
+                    || archetype == MonsterPhysicsArchetype.Dragon
+                    || archetype == MonsterPhysicsArchetype.FlyingBug)
+                {
+                    this.SimulateWingPhysics(monster, velocity);
+                }
+
+                // Fur physics for furry archetypes
+                if (archetype == MonsterPhysicsArchetype.Furry)
+                {
+                    this.SimulateFurPhysics(key, velocity);
+                }
+
+                // Tail physics for creatures that have tails
+                if (archetype == MonsterPhysicsArchetype.Furry
+                    || archetype == MonsterPhysicsArchetype.Dragon
+                    || archetype == MonsterPhysicsArchetype.Worm)
+                {
+                    this.SimulateTailPhysics(key, velocity);
+                }
+
                 this.lastPositions[key] = current;
             }
         }
@@ -517,6 +616,36 @@ public sealed class ModEntry : Mod
                 if (velocity.LengthSquared() < 0.3f)
                 {
                     this.SimulateFarmAnimalIdle(animal);
+                }
+
+                // Per-bone animal physics (ears, snout, body)
+                var typeName = animal.type.Value ?? string.Empty;
+                var isHeavyAnimal = typeName.Contains("Cow", StringComparison.OrdinalIgnoreCase)
+                    || typeName.Contains("Goat", StringComparison.OrdinalIgnoreCase)
+                    || typeName.Contains("Sheep", StringComparison.OrdinalIgnoreCase)
+                    || typeName.Contains("Pig", StringComparison.OrdinalIgnoreCase)
+                    || typeName.Contains("Bull", StringComparison.OrdinalIgnoreCase)
+                    || typeName.Contains("Ostrich", StringComparison.OrdinalIgnoreCase);
+                this.SimulateAnimalBonePhysics(key, velocity, isHeavyAnimal);
+
+                // Fur physics for woolly/furry animals
+                var hasFur = typeName.Contains("Sheep", StringComparison.OrdinalIgnoreCase)
+                    || typeName.Contains("Rabbit", StringComparison.OrdinalIgnoreCase)
+                    || typeName.Contains("Dog", StringComparison.OrdinalIgnoreCase)
+                    || typeName.Contains("Cat", StringComparison.OrdinalIgnoreCase)
+                    || typeName.Contains("Wolf", StringComparison.OrdinalIgnoreCase)
+                    || typeName.Contains("Fur", StringComparison.OrdinalIgnoreCase);
+                if (hasFur)
+                {
+                    this.SimulateFurPhysics(key, velocity);
+                }
+
+                // Tail physics for tailed animals
+                var hasTail = !typeName.Contains("Chicken", StringComparison.OrdinalIgnoreCase)
+                    && !typeName.Contains("Duck", StringComparison.OrdinalIgnoreCase);
+                if (hasTail)
+                {
+                    this.SimulateTailPhysics(key, velocity);
                 }
 
                 this.lastPositions[key] = current;
@@ -675,6 +804,15 @@ public sealed class ModEntry : Mod
         this.boneGroups.Clear();
         foreach (var hc in this.hairChains.Values) hc.Reset();
         this.hairChains.Clear();
+        // Reset wing/fur/tail/animal bone state
+        foreach (var wp in this.wingPairs.Values)   wp.Reset();
+        this.wingPairs.Clear();
+        foreach (var fc in this.furChains.Values)    fc.Reset();
+        this.furChains.Clear();
+        foreach (var tc in this.tailChains.Values)   tc.Reset();
+        this.tailChains.Clear();
+        foreach (var ab in this.animalBones.Values)  ab.Reset();
+        this.animalBones.Clear();
         this.grassBendDisplacement = Vector2.Zero;
         this.grassBendVelocity = Vector2.Zero;
         this.hitstopTicksRemaining = 0;
@@ -1346,6 +1484,38 @@ public sealed class ModEntry : Mod
                     {
                         this.hitstopTicksRemaining = Math.Max(this.hitstopTicksRemaining, 5);
                     }
+                }
+            }
+        }
+
+        // ── Wood shatter VFX ──────────────────────────────────────────────────
+        if (this.config.EnableWoodShatterEffects && (tool is Axe || tool is MeleeWeapon))
+        {
+            var hitWood = this.DetectWoodSurfaceNear(player);
+            if (hitWood)
+            {
+                this.ApplyWoodShatterVfx(playerPos);
+
+                // Swing-stop: tool hits wood = brief hitstop (wood absorbs impact)
+                if (this.config.EnableToolCollisionHitstop && this.config.EnableHitstopEffect)
+                {
+                    this.hitstopTicksRemaining = Math.Max(this.hitstopTicksRemaining, 3);
+                }
+
+                // Reverse body impulse (tool bounces back slightly from wood impact)
+                if (this.config.EnableToolCollisionHitstop)
+                {
+                    var woodBackDir = Game1.player.FacingDirection switch
+                    {
+                        0 => new Vector2(0f,  0.8f),
+                        1 => new Vector2(-0.8f, 0f),
+                        2 => new Vector2(0f, -0.8f),
+                        3 => new Vector2(0.8f, 0f),
+                        _ => Vector2.Zero
+                    };
+                    var pk    = this.GetCharacterKey(player);
+                    var existB = this.bodyImpulse.TryGetValue(pk, out var eb2) ? eb2 : Vector2.Zero;
+                    this.bodyImpulse[pk] = existB + woodBackDir * 0.22f;
                 }
             }
         }
@@ -2747,7 +2917,248 @@ public sealed class ModEntry : Mod
         chain.Step(chainForce, this.config.HairChainStiffness, this.config.HairChainDamping);
     }
 
-    // ── Idle motion ───────────────────────────────────────────────────────────
+    // ── Wing physics (HDT multi-bone wing chain) ──────────────────────────────
+
+    /// <summary>
+    /// Advance the wing pair simulation for a winged creature one tick.
+    /// Wingbeat impulses, body velocity, and glide forces all feed into the wing chain.
+    /// Models the Source Engine Jiggle Bones approach: 4 bones per wing, cascade-lag.
+    /// Called for Bat, Dragon, FlyingBug, and any winged archetype.
+    /// </summary>
+    private void SimulateWingPhysics(NPC creature, Vector2 velocity)
+    {
+        if (!this.config.EnableWingPhysics)
+        {
+            return;
+        }
+
+        var key = this.GetCharacterKey(creature);
+        if (!this.wingPairs.TryGetValue(key, out var wings))
+        {
+            wings = new WingPair();
+            this.wingPairs[key] = wings;
+        }
+
+        var strength = this.config.MonsterArchetypeStrength;
+        var t        = Game1.ticks;
+
+        // Base force from creature body velocity (movement drives wing flutter)
+        var baseForce = new Vector2(-velocity.X, -velocity.Y) * (0.028f * strength);
+
+        // Automatic wingbeat oscillation: sinusoidal Y force at ~20-tick period
+        // (mimics the rhythmic flap of flying creatures)
+        var phase = key & 0x3F;
+        var wingbeatForce = new Vector2(
+            (float)Math.Sin(t * 0.18f + phase) * 0.020f * strength,
+            (float)Math.Cos(t * 0.30f + phase) * 0.035f * strength);   // Y dominant = up/down flap
+
+        var totalForce = baseForce + wingbeatForce;
+        wings.Step(totalForce, this.config.WingChainStiffness, this.config.WingChainDamping);
+    }
+
+    /// <summary>
+    /// Get the wing pair for a creature (for rendering or impulse application).
+    /// Returns null if wing physics are off or the creature has no wing pair yet.
+    /// </summary>
+    private WingPair? GetOrCreateWingPair(int key)
+    {
+        if (!this.config.EnableWingPhysics) return null;
+        if (!this.wingPairs.TryGetValue(key, out var wings))
+        {
+            wings = new WingPair();
+            this.wingPairs[key] = wings;
+        }
+        return wings;
+    }
+
+    // ── Fur physics (HDT surface ripple chain) ────────────────────────────────
+
+    /// <summary>
+    /// Advance the fur ripple chain for a furry creature/animal one tick.
+    /// Models surface fur motion: ripples propagate from root to tip as the creature moves.
+    /// </summary>
+    private void SimulateFurPhysics(int key, Vector2 velocity)
+    {
+        if (!this.config.EnableFurPhysics)
+        {
+            return;
+        }
+
+        if (!this.furChains.TryGetValue(key, out var fur)
+            || fur.SegmentCount != this.config.FurChainSegments)
+        {
+            fur = new FurChain(this.config.FurChainSegments);
+            this.furChains[key] = fur;
+        }
+
+        var baseForce = new Vector2(-velocity.X, -velocity.Y) * 0.022f;
+
+        // Micro-oscillation: fur ripples even when stationary (breathing, ambient air)
+        var phase = key & 0x3F;
+        baseForce += new Vector2(
+            (float)Math.Sin(Game1.ticks * 0.09f + phase) * 0.006f,
+            (float)Math.Cos(Game1.ticks * 0.07f + phase) * 0.004f);
+
+        fur.Step(baseForce, this.config.FurChainStiffness, this.config.FurChainDamping);
+    }
+
+    // ── Tail physics (HDT pendant tail chain) ────────────────────────────────
+
+    /// <summary>
+    /// Advance the tail chain for a tailed creature/animal one tick.
+    /// The tail wags in response to velocity and adds idle sway when stationary.
+    /// </summary>
+    private void SimulateTailPhysics(int key, Vector2 velocity)
+    {
+        if (!this.config.EnableTailPhysics)
+        {
+            return;
+        }
+
+        if (!this.tailChains.TryGetValue(key, out var tail)
+            || tail.SegmentCount != this.config.TailChainSegments)
+        {
+            tail = new TailChain(this.config.TailChainSegments);
+            this.tailChains[key] = tail;
+        }
+
+        var baseForce = new Vector2(-velocity.X, -velocity.Y) * 0.030f;
+
+        // Idle tail wag: slow sinusoidal lateral oscillation
+        var phase = key & 0x3F;
+        baseForce += new Vector2(
+            (float)Math.Sin(Game1.ticks * 0.06f + phase) * 0.018f,
+            0f);
+
+        tail.Step(baseForce, this.config.TailChainStiffness, this.config.TailChainDamping);
+    }
+
+    // ── Animal bone physics ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// Advance the animal bone group (ears, snout, body) for a farm animal one tick.
+    /// </summary>
+    private void SimulateAnimalBonePhysics(int key, Vector2 velocity, bool isHeavy)
+    {
+        if (!this.config.EnableAnimalBonePhysics)
+        {
+            return;
+        }
+
+        if (!this.animalBones.TryGetValue(key, out var bones))
+        {
+            bones = new AnimalBoneGroup();
+            this.animalBones[key] = bones;
+        }
+
+        var force = new Vector2(-velocity.X, -velocity.Y) * (this.config.AnimalBoneStrength * 0.025f);
+
+        // Add idle micro-oscillation for always-active ear/snout animation
+        var phase = key & 0x3F;
+        force += new Vector2(
+            (float)Math.Sin(Game1.ticks * 0.08f + phase) * 0.008f * this.config.AnimalBoneStrength,
+            (float)Math.Cos(Game1.ticks * 0.10f + phase) * 0.005f * this.config.AnimalBoneStrength);
+
+        bones.Step(force, this.config.BoneStiffness, this.config.BoneDamping, isHeavy);
+    }
+
+    // ── Wood shatter VFX ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns true if there is a wooden surface (wood fence, stump, tree trunk, wood crate,
+    /// wood furniture) within ~1.5 tiles of the player in their facing direction.
+    /// Used to trigger wood shatter particle VFX.
+    /// </summary>
+    private bool DetectWoodSurfaceNear(Farmer player)
+    {
+        if (Game1.currentLocation is null) return false;
+
+        var facingOffset = player.FacingDirection switch
+        {
+            0 => new Vector2(0f, -64f),
+            1 => new Vector2(64f,  0f),
+            2 => new Vector2(0f,  64f),
+            3 => new Vector2(-64f, 0f),
+            _ => Vector2.Zero
+        };
+        var checkPos  = player.Position + facingOffset;
+        var checkTile = checkPos / 64f;
+
+        // Resource clumps: stumps, log stumps (debris type 600/602)
+        foreach (var clump in Game1.currentLocation.resourceClumps)
+        {
+            if (Vector2.Distance(clump.Tile * 64f, checkPos) < 96f)
+            {
+                var clumpName = clump.parentSheetIndex.Value;
+                // 600 = large stump, 602 = large log, 46/47 = hardwood stumps
+                if (clumpName == 600 || clumpName == 602 || clumpName == 46 || clumpName == 47)
+                {
+                    return true;
+                }
+            }
+        }
+
+        // Location objects at the facing tile
+        var tileKey = new Vector2((int)checkTile.X, (int)checkTile.Y);
+        if (Game1.currentLocation.objects.TryGetValue(tileKey, out var obj))
+        {
+            var objName = obj.Name ?? string.Empty;
+            if (ContainsAny(objName, "wood", "twig", "branch", "log", "stick",
+                                     "barrel", "crate", "box", "fence", "plank",
+                                     "table", "chair", "desk", "shelf", "trunk"))
+            {
+                return true;
+            }
+        }
+
+        // Furniture objects
+        foreach (var furniture in Game1.currentLocation.furniture)
+        {
+            if (furniture is null) continue;
+            if (Vector2.Distance(furniture.TileLocation * 64f, checkPos) > 128f) continue;
+            var fname = furniture.Name ?? string.Empty;
+            if (ContainsAny(fname, "wood", "pine", "oak", "table", "chair", "desk",
+                                   "shelf", "wardrobe", "cabinet", "log", "barrel",
+                                   "crate", "fence", "plank", "bench"))
+            {
+                return true;
+            }
+        }
+
+        // Terrain features: trees (wild trees + fruit trees)
+        foreach (var kv in Game1.currentLocation.terrainFeatures.Pairs)
+        {
+            if (kv.Value is Tree or FruitTree)
+            {
+                if (Vector2.Distance(kv.Key * 64f, checkPos) < 96f)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Spawns brown/tan wood splinter debris particles to simulate a wood shatter effect.
+    /// Particle count scales with intensity. Purely cosmetic.
+    /// </summary>
+    private void ApplyWoodShatterVfx(Vector2 worldPos)
+    {
+        if (Game1.currentLocation is null) return;
+        var count = Math.Max(2, (int)(5 * this.config.WoodShatterIntensity) + Game1.random.Next(4));
+        for (int i = 0; i < count; i++)
+        {
+            var angle = Game1.random.NextSingle() * MathF.PI * 2f;
+            var dist  = 12f + Game1.random.NextSingle() * 35f * this.config.WoodShatterIntensity;
+            var pos   = worldPos + new Vector2(MathF.Cos(angle) * dist, MathF.Sin(angle) * dist);
+            // Debris type 12 = brown/woody colored debris (closest to wood splinters)
+            Game1.createRadialDebris(Game1.currentLocation, 12, (int)(pos.X / 64), (int)(pos.Y / 64), 1, false);
+        }
+    }
+
+
 
     private void SimulateIdle(Character character, Vector2 velocity)
     {
@@ -4551,6 +4962,103 @@ public sealed class ModEntry : Mod
             () => this.config.EnableToolCollisionHitstop, v => this.config.EnableToolCollisionHitstop = v,
             () => "Enable tool collision hitstop",
             () => "When a sword or pickaxe hits stone/metal, the player's body recoils backward (swing-back impulse) and extra hitstop frames fire. Simulates tool bouncing off hard material.");
+
+        // ── Wood shatter VFX ──────────────────────────────────────────────────
+        api.AddSectionTitle(this.ModManifest, () => "Wood Shatter VFX");
+        api.AddParagraph(this.ModManifest, () =>
+            "When an axe or sword hits a wooden surface (trees, fences, stumps, crates, wood furniture), " +
+            "brown wood splinter particles burst from the impact point, and the tool briefly hitstops (stops mid-swing). " +
+            "Models the Source Engine 'weapon stops on hit' behaviour for non-hard surfaces.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableWoodShatterEffects, v => this.config.EnableWoodShatterEffects = v,
+            () => "Enable wood shatter VFX",
+            () => "Wood splinter particles + tool swing-stop on wooden surfaces.");
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.WoodShatterIntensity, v => this.config.WoodShatterIntensity = v,
+            () => "Wood shatter intensity",
+            () => "Particle count multiplier. 1 = 4-8 splinters (default), 2 = dramatic chunk shower.", 0f, 2f, 0.1f);
+
+        // ── Wing physics ──────────────────────────────────────────────────────
+        api.AddSectionTitle(this.ModManifest, () => "Wing Physics (HDT Multi-Bone)");
+        api.AddParagraph(this.ModManifest, () =>
+            "4-bone per-wing spring chain (root → inner → outer → tip) for all winged creatures. " +
+            "Inspired by Source Engine Jiggle Bones and Skyrim HDT wing setups. " +
+            "Each wing has independent cascade lag: root reacts first, tip follows ~6 ticks later. " +
+            "Works for bats, dragons, flying bugs, birds, and all modded winged creatures.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableWingPhysics, v => this.config.EnableWingPhysics = v,
+            () => "Enable wing physics",
+            () => "Multi-bone wing chain for all winged creatures.");
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.WingChainStiffness, v => this.config.WingChainStiffness = v,
+            () => "Wing chain stiffness",
+            () => "Lower = floppy membrane wings (bat, dragon). Higher = rigid feathered wings (bird). Range 0.04–0.25.", 0.04f, 0.25f, 0.01f);
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.WingChainDamping, v => this.config.WingChainDamping = v,
+            () => "Wing chain damping",
+            () => "Lower = more wing flutter cycles. Higher = quick settle. Range 0.03–0.20.", 0.03f, 0.20f, 0.01f);
+
+        // ── Fur physics ───────────────────────────────────────────────────────
+        api.AddSectionTitle(this.ModManifest, () => "Fur Physics (HDT Surface Ripple)");
+        api.AddParagraph(this.ModManifest, () =>
+            "Surface fur ripple chain for all furry creatures and farm animals. " +
+            "Fur propagates a wave from base-to-tip as the creature moves. " +
+            "Different from hair — fur hugs the body surface (higher chain influence, gentler attenuation). " +
+            "Works for wolves, bears, cats, dogs, sheep, rabbits, and all modded furry creatures.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableFurPhysics, v => this.config.EnableFurPhysics = v,
+            () => "Enable fur physics",
+            () => "Surface fur ripple chain for furry creatures and woolly/fluffy farm animals.");
+        api.AddNumberOption(this.ModManifest,
+            () => (float)this.config.FurChainSegments, v => this.config.FurChainSegments = (int)Math.Round(v),
+            () => "Fur chain segments",
+            () => "Number of fur spring links. 2 = coarse, 6 = smooth ripple wave.", 2f, 6f, 1f);
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.FurChainStiffness, v => this.config.FurChainStiffness = v,
+            () => "Fur chain stiffness",
+            () => "Lower = very fluffy/loose fur. Higher = tight smooth coat.", 0.04f, 0.30f, 0.01f);
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.FurChainDamping, v => this.config.FurChainDamping = v,
+            () => "Fur chain damping", () => "Fur ripple decay rate.", 0.03f, 0.20f, 0.01f);
+
+        // ── Tail physics ──────────────────────────────────────────────────────
+        api.AddSectionTitle(this.ModManifest, () => "Tail Physics (HDT Pendant Chain)");
+        api.AddParagraph(this.ModManifest, () =>
+            "Multi-bone pendant tail chain for all tailed creatures. " +
+            "Lateral wag is emphasized (tails wag side-to-side more than hair flows). " +
+            "Base bone is stiffer, tip softens for natural tail-tip flutter. " +
+            "Works for wolves, cats, dogs, dragons, cows, horses, pigs, and all modded tailed creatures.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableTailPhysics, v => this.config.EnableTailPhysics = v,
+            () => "Enable tail physics",
+            () => "Multi-bone tail chain for all tailed creatures and farm animals.");
+        api.AddNumberOption(this.ModManifest,
+            () => (float)this.config.TailChainSegments, v => this.config.TailChainSegments = (int)Math.Round(v),
+            () => "Tail chain segments",
+            () => "Number of tail spring links. 2 = stub tail, 6 = long serpentine dragon tail.", 2f, 6f, 1f);
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.TailChainStiffness, v => this.config.TailChainStiffness = v,
+            () => "Tail stiffness",
+            () => "Lower = whippy serpentine tail. Higher = stiff stubby tail.", 0.04f, 0.30f, 0.01f);
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.TailChainDamping, v => this.config.TailChainDamping = v,
+            () => "Tail damping", () => "Tail oscillation decay rate.", 0.03f, 0.20f, 0.01f);
+
+        // ── Animal bone physics ───────────────────────────────────────────────
+        api.AddSectionTitle(this.ModManifest, () => "Animal Bone Physics");
+        api.AddParagraph(this.ModManifest, () =>
+            "Per-animal spring bones (ears, snout/beak, body) for all farm animals. " +
+            "Rabbit ears flop independently on jumps. Chicken combs bob on pecks. " +
+            "Cow ears flick, pig snouts bob on sniffs. Horse ears prick on acceleration. " +
+            "Anatomically-correct spring constants per species (heavy = stiffer, light = floppy).");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableAnimalBonePhysics, v => this.config.EnableAnimalBonePhysics = v,
+            () => "Enable animal bone physics",
+            () => "Per-bone springs for ears, snout, and body on all farm animals.");
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.AnimalBoneStrength, v => this.config.AnimalBoneStrength = v,
+            () => "Animal bone strength",
+            () => "Overall intensity multiplier. 0 = off, 1 = default, 2 = maximum jiggle.", 0f, 2f, 0.05f);
 
         // ── Gender overrides ──────────────────────────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "Gender Overrides");

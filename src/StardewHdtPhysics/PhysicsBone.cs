@@ -396,3 +396,418 @@ public sealed class HairChain
 
     public int SegmentCount => segmentCount;
 }
+
+// ── Wing chain physics ────────────────────────────────────────────────────────
+
+/// <summary>
+/// Per-wing spring chain modelling a flexible wing (bat, dragon, bird).
+/// Inspired by Source Engine Jiggle Bones and Skyrim HDT wing setups.
+///
+/// Architecture (4 bones, innermost → outermost):
+///   WingRoot  — attached to the creature's shoulder/back, receives full body force
+///   WingInner — mid-inner segment; receives 80% of root force + spring toward root
+///   WingOuter — mid-outer; receives 65% force + spring toward inner
+///   WingTip   — free tip; receives 50% force + spring toward outer (most elastic)
+///
+/// The chain automatically produces the characteristic "flapping" motion:
+///   On a wingbeat, the root gets a strong Y impulse; tip lags behind ~6 ticks
+///   creating a visually realistic fold/unfold wave along the wing surface.
+///
+/// Two instances (Left + Right) should be created per winged creature.
+/// L wing and R wing are given mirrored X forces so they flap symmetrically.
+/// </summary>
+public sealed class WingChain
+{
+    // Fixed 4 bones (Source/HDT wing convention)
+    public const int SegmentCount = 4;
+
+    // Attenuations per segment (how much parent external force passes down the chain)
+    private static readonly float[] ForceAttenuation = { 1.00f, 0.80f, 0.65f, 0.50f };
+
+    // How strongly each segment is spring-pulled toward its parent
+    private static readonly float[] ChainInfluence = { 0f, 0.30f, 0.28f, 0.26f };
+
+    private readonly BoneState[] segments = new BoneState[SegmentCount];
+
+    /// <summary>Positive = left wing, Negative = right wing (mirrors X force).</summary>
+    public readonly float LateralSign;
+
+    public WingChain(float lateralSign = 1f)
+    {
+        LateralSign = lateralSign > 0 ? 1f : -1f;
+    }
+
+    /// <summary>
+    /// Advance the wing chain by one tick.
+    /// </summary>
+    /// <param name="rootForce">Body-center external force (from velocity/wingbeat impulse).</param>
+    /// <param name="stiffness">Spring return constant.</param>
+    /// <param name="damping">Damping coefficient.</param>
+    public void Step(Vector2 rootForce, float stiffness, float damping)
+    {
+        // Mirror X so left/right wings are symmetric
+        var mirroredForce = new Vector2(rootForce.X * LateralSign, rootForce.Y);
+
+        for (int i = 0; i < SegmentCount; i++)
+        {
+            var force = mirroredForce * ForceAttenuation[i];
+
+            // Chain spring: each bone pulled toward its parent
+            if (i > 0)
+            {
+                var toParent = segments[i - 1].Position - segments[i].Position;
+                force += toParent * ChainInfluence[i];
+            }
+
+            // Wing tip is the most elastic — slightly softer spring
+            var s = stiffness * (1f - i * 0.06f);  // root=s, tip=s*0.82
+            var d = damping  * (1f - i * 0.03f);   // root=d, tip=d*0.91
+
+            segments[i].Step(force, Math.Max(0.01f, s), Math.Max(0.01f, d));
+        }
+    }
+
+    /// <summary>Apply an instant velocity impulse (wingbeat, hit, explosion).</summary>
+    public void ApplyImpulse(Vector2 impulse)
+    {
+        var mir = new Vector2(impulse.X * LateralSign, impulse.Y);
+        for (int i = 0; i < SegmentCount; i++)
+        {
+            segments[i].ApplyImpulse(mir * ForceAttenuation[i]);
+        }
+    }
+
+    /// <summary>
+    /// Visual displacement of the wing tip (weighted toward outer segments).
+    /// Use this for the sprite offset.
+    /// </summary>
+    public Vector2 GetTipDisplacement()
+    {
+        // Weighted: tip 45%, outer 30%, inner 15%, root 10%
+        return segments[3].Position * 0.45f
+             + segments[2].Position * 0.30f
+             + segments[1].Position * 0.15f
+             + segments[0].Position * 0.10f;
+    }
+
+    public bool IsNearRest(float threshold = 0.003f)
+    {
+        for (int i = 0; i < SegmentCount; i++)
+        {
+            if (!segments[i].IsNearRest(threshold)) return false;
+        }
+        return true;
+    }
+
+    public void Reset()
+    {
+        for (int i = 0; i < SegmentCount; i++) segments[i].Reset();
+    }
+}
+
+/// <summary>
+/// Paired left + right wings. One WingPair per winged creature.
+/// </summary>
+public sealed class WingPair
+{
+    public readonly WingChain Left  = new( 1f);
+    public readonly WingChain Right = new(-1f);
+
+    /// <summary>Advance both wings by one tick.</summary>
+    public void Step(Vector2 bodyForce, float stiffness, float damping)
+    {
+        Left.Step(bodyForce,  stiffness, damping);
+        Right.Step(bodyForce, stiffness, damping);
+    }
+
+    /// <summary>Apply impulse to both wings simultaneously.</summary>
+    public void ApplyImpulse(Vector2 impulse)
+    {
+        Left.ApplyImpulse(impulse);
+        Right.ApplyImpulse(impulse);
+    }
+
+    /// <summary>
+    /// Combined visual displacement (average of both wing tips, X cancels on symmetric flap
+    /// leaving the Y displacement that drives the up/down wingbeat visual).
+    /// </summary>
+    public Vector2 GetVisualDisplacement()
+    {
+        var l = Left.GetTipDisplacement();
+        var r = Right.GetTipDisplacement();
+        // Average Y (both wings go up/down together), X is kept for asymmetric banking
+        return new Vector2((l.X + r.X) * 0.5f, (l.Y + r.Y) * 0.5f);
+    }
+
+    public bool IsNearRest(float threshold = 0.003f)
+        => Left.IsNearRest(threshold) && Right.IsNearRest(threshold);
+
+    public void Reset()
+    {
+        Left.Reset();
+        Right.Reset();
+    }
+}
+
+// ── Fur chain physics ─────────────────────────────────────────────────────────
+
+/// <summary>
+/// Surface fur ripple chain.  Simulates the motion of fur or short hair along a
+/// creature's body surface — not pendant like hair, but surface-following with
+/// lateral wave propagation.
+///
+/// Architecture:
+///   3–6 segments, base-to-tip direction runs away from the creature's skin.
+///   Base segment tracks the body closely (high chain influence).
+///   Middle segments have intermediate lag.
+///   Tip segments are the most free and produce the "ripple" visible at the fur surface.
+///
+/// Force model differs from HairChain:
+///   • Base gets full body force (same as HairChain root)
+///   • Attenuation is gentler (0.80 per step) — fur sticks to the body more than hair
+///   • Chain influence is higher (0.40) — each segment is pulled harder toward its parent
+///     so the fur doesn't fly out as far as hair does
+/// </summary>
+public sealed class FurChain
+{
+    private readonly BoneState[] segments;
+    private readonly int segmentCount;
+
+    public FurChain(int segmentCount)
+    {
+        this.segmentCount = Math.Max(2, Math.Min(segmentCount, 6));
+        segments = new BoneState[this.segmentCount];
+    }
+
+    public void Step(Vector2 baseForce, float stiffness, float damping)
+    {
+        const float Attenuation   = 0.80f;
+        const float ChainInfluence = 0.40f;
+
+        segments[0].Step(baseForce, stiffness, damping);
+
+        var force = baseForce;
+        for (int i = 1; i < segmentCount; i++)
+        {
+            force *= Attenuation;
+            var toParent = segments[i - 1].Position - segments[i].Position;
+            segments[i].Step(force + toParent * ChainInfluence, stiffness * 0.85f, damping * 0.88f);
+        }
+    }
+
+    public void ApplyImpulse(Vector2 impulse)
+    {
+        for (int i = 0; i < segmentCount; i++)
+            segments[i].ApplyImpulse(impulse * MathF.Pow(0.80f, i));
+    }
+
+    /// <summary>Weighted average of all segments (fur moves uniformly unlike hair tip).</summary>
+    public Vector2 GetDisplacement()
+    {
+        if (segmentCount == 0) return Vector2.Zero;
+        var sum = Vector2.Zero;
+        var weight = 1.0f;
+        var totalW = 0f;
+        for (int i = 0; i < segmentCount; i++)
+        {
+            sum    += segments[i].Position * weight;
+            totalW += weight;
+            weight *= 0.8f;
+        }
+        return totalW > 0 ? sum / totalW : Vector2.Zero;
+    }
+
+    public bool IsNearRest(float threshold = 0.003f)
+    {
+        for (int i = 0; i < segmentCount; i++)
+            if (!segments[i].IsNearRest(threshold)) return false;
+        return true;
+    }
+
+    public void Reset()
+    {
+        for (int i = 0; i < segmentCount; i++) segments[i].Reset();
+    }
+
+    public int SegmentCount => segmentCount;
+}
+
+// ── Tail chain physics ────────────────────────────────────────────────────────
+
+/// <summary>
+/// Pendant tail chain.  Like HairChain but tuned for a heavier, stiffer tail:
+///   • Base bone is stiffer (close to the body, can't flail freely)
+///   • Outer bones soften progressively toward the tip
+///   • Lateral component is emphasized (tails wag side-to-side more than hair flows)
+///   • Gravity simulation: tail droops downward when stationary (Y bias toward rest)
+///
+/// Default 4 segments: tail_root → tail_mid1 → tail_mid2 → tail_tip.
+/// Dragon tails use 5 segments for extra length.
+/// </summary>
+public sealed class TailChain
+{
+    private readonly BoneState[] segments;
+    private readonly int segmentCount;
+
+    public TailChain(int segmentCount)
+    {
+        this.segmentCount = Math.Max(2, Math.Min(segmentCount, 6));
+        segments = new BoneState[this.segmentCount];
+    }
+
+    public void Step(Vector2 bodyForce, float stiffness, float damping)
+    {
+        const float Attenuation   = 0.72f;   // tails are heavier, attenuate faster
+        const float ChainInfluence = 0.32f;  // stiffer chain than hair
+
+        // Emphasize lateral (X) force for tail wag
+        var tailForce = new Vector2(bodyForce.X * 1.40f, bodyForce.Y * 0.85f);
+
+        segments[0].Step(tailForce, stiffness, damping);
+
+        var force = tailForce;
+        for (int i = 1; i < segmentCount; i++)
+        {
+            force *= Attenuation;
+            var toParent = segments[i - 1].Position - segments[i].Position;
+            // Tail tip softens progressively
+            var s = stiffness * (1f - i * 0.08f);
+            var d = damping   * (1f - i * 0.05f);
+            segments[i].Step(force + toParent * ChainInfluence, Math.Max(0.02f, s), Math.Max(0.02f, d));
+        }
+    }
+
+    public void ApplyImpulse(Vector2 impulse)
+    {
+        // Lateral impulse for tail wag, attenuated toward tip
+        var lateralImpulse = new Vector2(impulse.X * 1.3f, impulse.Y * 0.8f);
+        for (int i = 0; i < segmentCount; i++)
+            segments[i].ApplyImpulse(lateralImpulse * MathF.Pow(0.72f, i));
+    }
+
+    public Vector2 GetTipDisplacement()
+    {
+        if (segmentCount < 2) return segments[0].Position;
+        var tip    = segments[segmentCount - 1].Position;
+        var midTip = segments[segmentCount - 2].Position;
+        return tip * 0.55f + midTip * 0.45f;
+    }
+
+    public bool IsNearRest(float threshold = 0.003f)
+    {
+        for (int i = 0; i < segmentCount; i++)
+            if (!segments[i].IsNearRest(threshold)) return false;
+        return true;
+    }
+
+    public void Reset()
+    {
+        for (int i = 0; i < segmentCount; i++) segments[i].Reset();
+    }
+
+    public int SegmentCount => segmentCount;
+}
+
+// ── Animal bone group ─────────────────────────────────────────────────────────
+
+/// <summary>
+/// Per-animal spring bone set modelled after source-engine animal jiggle bones.
+/// Each species gets anatomically appropriate bone assignments:
+///
+///   Chicken/Duck/Bird:
+///     EarL/EarR → comb/wattle bobs, Snout → beak peck, Body → chest bounce
+///   Rabbit:
+///     EarL/EarR → independent long ear flop (very soft springs), Body → hop bounce
+///   Cow/Goat/Sheep/Pig/Bull:
+///     EarL/EarR → ear flick, Snout → head bob/sniff, Body → belly jiggle (large mass)
+///   Horse/Ostrich:
+///     EarL/EarR → ear prick, Body → back bounce while running
+///   Dog/Cat (pet):
+///     EarL/EarR → ear flop (soft for floppy ears, firm for pointed), Body → body wag
+///
+/// Bone indices within this group (not shared with BoneIndex):
+/// </summary>
+public static class AnimalBoneIdx
+{
+    public const int EarL  = 0;
+    public const int EarR  = 1;
+    public const int Snout = 2;  // beak/snout/head
+    public const int Body  = 3;  // chest/belly center
+
+    public const int Count = 4;
+}
+
+/// <summary>
+/// Holds the spring state for all animal bones.
+/// Created lazily per animal instance.
+/// </summary>
+public sealed class AnimalBoneGroup
+{
+    public readonly BoneState[] Bones = new BoneState[AnimalBoneIdx.Count];
+
+    /// <summary>
+    /// Advance all animal bones one tick.
+    /// </summary>
+    /// <param name="bodyForce">External force from velocity/idle (body-center).</param>
+    /// <param name="stiffness">Base spring constant.</param>
+    /// <param name="damping">Base damping.</param>
+    /// <param name="isHeavy">True for large animals (cow, pig, etc.) — reduces ear/snout elasticity.</param>
+    public void Step(Vector2 bodyForce, float stiffness, float damping, bool isHeavy)
+    {
+        // Body: moderate response (large mass = stiffer)
+        var bodyScale = isHeavy ? 0.60f : 0.85f;
+        var bodyStiff = isHeavy ? stiffness * 1.20f : stiffness;
+        var bodyDamp  = isHeavy ? damping   * 1.15f : damping;
+        Bones[AnimalBoneIdx.Body].Step(bodyForce * bodyScale, bodyStiff, bodyDamp);
+
+        // Ears: mirrored X, moderate Y — ears flick sideways and bounce
+        var earScale  = isHeavy ? 0.45f : 0.90f;  // rabbits = very floppy (light) vs cow = stiff
+        var earStiff  = isHeavy ? stiffness * 0.85f : stiffness * 0.55f;  // floppy vs firm
+        var earDamp   = isHeavy ? damping   * 0.90f : damping   * 0.65f;
+        Bones[AnimalBoneIdx.EarL].Step(
+            new Vector2(-bodyForce.X * 0.60f, bodyForce.Y * 0.75f) * earScale,
+            earStiff, earDamp);
+        Bones[AnimalBoneIdx.EarR].Step(
+            new Vector2( bodyForce.X * 0.60f, bodyForce.Y * 0.75f) * earScale,
+            earStiff, earDamp);
+
+        // Snout/beak: Y-dominant (bob/peck), gentle X
+        var snoutScale = isHeavy ? 0.40f : 0.65f;
+        Bones[AnimalBoneIdx.Snout].Step(
+            new Vector2(bodyForce.X * 0.20f, bodyForce.Y * 1.10f) * snoutScale,
+            stiffness * 0.95f, damping);
+    }
+
+    public void ApplyImpulse(Vector2 impulse)
+    {
+        Bones[AnimalBoneIdx.Body].ApplyImpulse(impulse * 0.85f);
+        Bones[AnimalBoneIdx.EarL].ApplyImpulse(new Vector2(-impulse.X * 0.70f, impulse.Y * 0.60f));
+        Bones[AnimalBoneIdx.EarR].ApplyImpulse(new Vector2( impulse.X * 0.70f, impulse.Y * 0.60f));
+        Bones[AnimalBoneIdx.Snout].ApplyImpulse(new Vector2(impulse.X * 0.30f, impulse.Y * 0.90f));
+    }
+
+    /// <summary>Blended visual displacement from all animal bones.</summary>
+    public Vector2 GetVisualDisplacement()
+    {
+        var body  = Bones[AnimalBoneIdx.Body].Position;
+        var earL  = Bones[AnimalBoneIdx.EarL].Position;
+        var earR  = Bones[AnimalBoneIdx.EarR].Position;
+        var snout = Bones[AnimalBoneIdx.Snout].Position;
+
+        // Body 50%, ears average 25%, snout 25%
+        var earAvg = (earL + earR) * 0.5f;
+        return body * 0.50f + earAvg * 0.25f + snout * 0.25f;
+    }
+
+    public bool IsAllNearRest(float threshold = 0.003f)
+    {
+        for (int i = 0; i < AnimalBoneIdx.Count; i++)
+            if (!Bones[i].IsNearRest(threshold)) return false;
+        return true;
+    }
+
+    public void Reset()
+    {
+        for (int i = 0; i < AnimalBoneIdx.Count; i++) Bones[i].Reset();
+    }
+}
