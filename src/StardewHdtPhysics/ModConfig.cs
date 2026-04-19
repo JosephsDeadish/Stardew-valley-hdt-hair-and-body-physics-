@@ -471,6 +471,23 @@ public sealed class ModConfig
     /// </summary>
     public Dictionary<string, string> GenderOverrides { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
+    // ── Crafting station VFX ─────────────────────────────────────────────────
+    /// <summary>
+    /// Spawn typed physics particles when the player uses crafting stations:
+    /// Forge → sparks + metal chips; Furnace → sparks + sawdust;
+    /// Workbench → wood splinters + sawdust; Anvil/Shed → stone dust.
+    /// Purely cosmetic — no gameplay effect.
+    /// </summary>
+    public bool EnableCraftingStationVfx { get; set; } = true;
+
+    // ── Terrain footstep effects ──────────────────────────────────────────────
+    /// <summary>
+    /// Spawn tiny typed physics particles based on the tile the player is stepping on:
+    /// grass/dirt → sawdust puff; snow → white particle; water → splash (sawdust stand-in);
+    /// gravel/stone → stone micro-chunk. Only fires on actual steps (run/walk cadence).
+    /// </summary>
+    public bool EnableTerrainFootstepEffects { get; set; } = true;
+
     // ── Entity pooling / cleanup ───────────────────────────────────────────────
     /// <summary>
     /// Maximum number of entity physics slots (bone groups, hair chains, etc.) that

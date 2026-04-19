@@ -949,8 +949,30 @@ public sealed class TypedPhysicsParticle
     public float Size;
 
     /// <summary>
+    /// Number of bounces the particle has performed off the ground plane.
+    /// Multi-bounce is allowed until <see cref="MaxBounces"/> is reached.
+    /// </summary>
+    public int BounceCount;
+
+    /// <summary>Maximum number of ground bounces before the particle slides to rest.</summary>
+    public const int MaxBounces = 3;
+
+    /// <summary>
     /// Set to <c>true</c> after the particle has already bounced once.
-    /// Prevents infinite multi-bounces.
+    /// Kept for backward-compat; use <see cref="BounceCount"/> for new logic.
     /// </summary>
     public bool HasBounced;
+
+    /// <summary>
+    /// World-Y position of the virtual ground plane for this particle.
+    /// Set to spawn-Y + a per-kind drop height so particles arc and land
+    /// realistically rather than falling off-screen forever.
+    /// </summary>
+    public float GroundY;
+
+    /// <summary>
+    /// When <c>true</c>, the particle has reached the ground, lost most energy,
+    /// and now only responds to walk-scatter impulses (skips gravity integration).
+    /// </summary>
+    public bool IsResting;
 }

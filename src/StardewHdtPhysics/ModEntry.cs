@@ -257,8 +257,9 @@ public sealed class ModEntry : Mod
     private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
     {
         this.Monitor.Log("╔══════════════════════════════════════════════════════════════╗", LogLevel.Info);
-        this.Monitor.Log("║  SVP Physics, Collisions, Hitstops, Idles, Ragdolls — v0.8.0 ║", LogLevel.Info);
+        this.Monitor.Log("║  SVP Physics, Collisions, Hitstops, Idles, Ragdolls — v0.9.0 ║", LogLevel.Info);
         this.Monitor.Log("║  Typed debris (stone/wood/sawdust), per-bone clothing mult.   ║", LogLevel.Info);
+        this.Monitor.Log("║  Floor-plane debris landing, crafting VFX, terrain footsteps  ║", LogLevel.Info);
         this.Monitor.Log("╠══════════════════════════════════════════════════════════════╣", LogLevel.Info);
         this.Monitor.Log($"║  Body physics:           {(this.config.EnableBodyPhysics ? "ON " : "OFF")}", LogLevel.Info);
         this.Monitor.Log($"║  Hair physics (chain):   {(this.config.EnableHairPhysics ? "ON " : "OFF")} ({this.config.HairChainSegments} segments)", LogLevel.Info);
@@ -981,6 +982,18 @@ public sealed class ModEntry : Mod
         if (this.config.EnableMagicCastPhysics)
         {
             this.ApplyMagicCastPhysics(Game1.player);
+        }
+
+        // Crafting station VFX: spawn typed particles when using forge/furnace/workbench etc.
+        if (this.config.EnableCraftingStationVfx && this.config.EnableTypedPhysicsDebris)
+        {
+            this.TryApplyCraftingStationVfx(Game1.player);
+        }
+
+        // Furniture collision physics: body recoil + VFX when bumping furniture
+        if (this.config.EnableFurnitureCollisionPhysics)
+        {
+            this.TryApplyFurnitureCollisionRecoil(Game1.player, playerKey);
         }
 
         // Combat hit VFX: spark on stone/metal, slime spray, blood splatter
@@ -1831,9 +1844,84 @@ public sealed class ModEntry : Mod
             var cExist    = this.clothingImpulse.TryGetValue(key, out var ci) ? ci : Vector2.Zero;
             this.clothingImpulse[key] = cExist + stepImpulse * (clothScale * this.config.ClothingFlowStrength);
         }
+
+        // Terrain footstep effects — only for the player character, every other step
+        if (this.config.EnableTerrainFootstepEffects
+            && this.config.EnableTypedPhysicsDebris
+            && character is Farmer farmer
+            && ((t / stepPeriod) % 2 == 0)
+            && Game1.currentLocation is not null)
+        {
+            this.SpawnTerrainFootstepParticle(farmer);
+        }
     }
 
     // ── Combat hit VFX ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Spawns tiny typed physics particles at the farmer's foot position based on
+    /// the terrain type of the tile they are currently standing on:
+    ///   Grass/Dirt   → tiny Sawdust puff (brown)
+    ///   Snow         → tiny Sawdust puff (white tinted — re-uses Sawdust colour)
+    ///   Gravel/Stone → micro StoneChunk chip
+    ///   Sand         → Sawdust scatter
+    ///   Water        → Sawdust splash (stand-in; water is the game's own VFX)
+    /// Low particle count (1–2) so it stays subtle.
+    /// </summary>
+    private void SpawnTerrainFootstepParticle(Farmer farmer)
+    {
+        var pos  = farmer.Position;
+        var tile = new Microsoft.Xna.Framework.Point((int)(pos.X / 64), (int)(pos.Y / 64));
+
+        // Read the back-layer tile index to detect terrain type
+        int tileId = -1;
+        try
+        {
+            var layer = Game1.currentLocation?.map?.GetLayer("Back");
+            if (layer != null)
+            {
+                var t = layer.Tiles[tile.X, tile.Y];
+                if (t?.TileSheet != null)
+                    tileId = t.TileIndex;
+            }
+        }
+        catch { return; }
+
+        if (tileId < 0) return;
+
+        // Foot position is at the character's Y + half-tile so it spawns at the feet
+        var footPos = new Vector2(pos.X + 16f, pos.Y + 48f);
+
+        // Classify tile by well-known tilesheet ranges (spring/summer outdoor):
+        // Grass patches: 0-3, 8-11, 16-19 (spring); varies by season.
+        // Stone/gravel: ~30-50; water: ~20-25 (rough approximations).
+        // Use a broad check rather than per-tileset constants to stay compatible with mods.
+        var isSnow = Game1.IsWinter || Game1.currentLocation?.Name == "IceCave"
+                  || (Game1.currentLocation?.Name?.Contains("Iceberg", StringComparison.OrdinalIgnoreCase) ?? false);
+        var isWater = (tileId >= 20 && tileId <= 27) || (tileId >= 44 && tileId <= 47);
+        var isStone = (tileId >= 30 && tileId <= 55) || (tileId >= 200 && tileId <= 210);
+        var isSand  = (tileId >= 60 && tileId <= 80);
+
+        if (isWater)
+        {
+            // Water splash: tiny upward sawdust with blue-ish tint (we can't change colour here,
+            // but very small sawdust still reads as water disturbance)
+            this.SpawnTypedDebris(footPos, PhysicsParticleKind.Sawdust, 1, 0.4f);
+        }
+        else if (isStone)
+        {
+            this.SpawnTypedDebris(footPos, PhysicsParticleKind.StoneChunk, 1, 0.5f);
+        }
+        else if (isSand)
+        {
+            this.SpawnTypedDebris(footPos, PhysicsParticleKind.Sawdust, 1 + Game1.random.Next(2), 0.35f);
+        }
+        else
+        {
+            // Default: grass/dirt/snow → tiny sawdust puff
+            this.SpawnTypedDebris(footPos, PhysicsParticleKind.Sawdust, 1, isSnow ? 0.5f : 0.3f);
+        }
+    }
 
     /// <summary>
     /// Detects what material was hit by the current tool swing and applies appropriate VFX:
@@ -2257,31 +2345,38 @@ public sealed class ModEntry : Mod
                         break;
                 }
 
-                // Always-on jello micro-randomness for feminine: ensures physics never go fully still
-                impulse += new Vector2(
-                    (Game1.random.NextSingle() - 0.5f) * bStr * 0.022f,
-                    (Game1.random.NextSingle() - 0.5f) * bStr * 0.018f);
+                // Always-on jello micro-randomness for feminine: only fires when character
+                // is actively moving to prevent persistent circular drift when still.
+                if (velocity.LengthSquared() > 0.05f)
+                {
+                    impulse += new Vector2(
+                        (Game1.random.NextSingle() - 0.5f) * bStr * 0.022f,
+                        (Game1.random.NextSingle() - 0.5f) * bStr * 0.018f);
+                }
             }
             else if (profile == BodyProfileType.Masculine)
             {
                 var grStr = this.config.MaleGroinStrength * lowerBodyMult;
                 var buStr = this.config.MaleButtStrength  * lowerBodyMult;
 
-                // Male groin physics: slinky-style oscillation — side-to-side for N/S, front-back for E/W
+                // Male groin physics: discrete step-based impulses driven by movement velocity.
+                // Previously used Math.Sin(ticks) which caused continuous circular oscillation
+                // even when the character was standing still.  Now only fires on real movement.
+                var speed = velocity.Length();
                 switch (facing)
                 {
-                    case 0: // North: lateral slinky side-to-side
-                    case 2: // South: lateral slinky side-to-side
+                    case 0: // North: lateral sway from left-right foot alternation
+                    case 2: // South: lateral sway
                         impulse += new Vector2(
-                            (float)Math.Sin(Game1.ticks * 0.22f + key * 0.1f) * grStr * 0.035f,
-                            (Game1.random.NextSingle() - 0.5f) * grStr * 0.010f);
+                            Math.Abs(velocity.X) * grStr * 0.045f * (((Game1.ticks / 10 + key) % 2 == 0) ? 1f : -1f),
+                            (Game1.random.NextSingle() - 0.5f) * grStr * 0.008f * speed);
                         break;
 
-                    case 1: // East: forward-back slinky
-                    case 3: // West: forward-back slinky
+                    case 1: // East: forward-back sway from step rhythm
+                    case 3: // West
                         impulse += new Vector2(
-                            (Game1.random.NextSingle() - 0.5f) * grStr * 0.010f,
-                            (float)Math.Sin(Game1.ticks * 0.22f + key * 0.1f) * grStr * 0.035f);
+                            (Game1.random.NextSingle() - 0.5f) * grStr * 0.008f * speed,
+                            Math.Abs(velocity.Y) * grStr * 0.045f * (((Game1.ticks / 10 + key) % 2 == 0) ? 1f : -1f));
                         break;
                 }
 
@@ -2296,12 +2391,12 @@ public sealed class ModEntry : Mod
             }
         }
 
-        // Continuous micro-activity: very small random baseline so physics never go fully dormant.
-        // Simulates the constant tiny vibrations of breathing, muscle tension, and micro-movements.
-        // Feminine gets a larger baseline so jello quality is always present even when standing.
-        if (baseStrength > 0f)
+        // Continuous micro-activity: only apply when the character is actually moving
+        // so that stationary characters settle cleanly rather than exhibiting perpetual
+        // random jitter that can look like gyration or circular motion.
+        if (baseStrength > 0f && velocity.LengthSquared() > 0.02f)
         {
-            var microScale = profile == BodyProfileType.Feminine ? 0.013f : 0.008f;
+            var microScale = profile == BodyProfileType.Feminine ? 0.010f : 0.006f;
             impulse += new Vector2(
                 (Game1.random.NextSingle() - 0.5f) * microScale * baseStrength,
                 (Game1.random.NextSingle() - 0.5f) * microScale * 0.75f * baseStrength);
@@ -2320,11 +2415,12 @@ public sealed class ModEntry : Mod
 
         // Feminine gets much slower decay = very jello-like, long lingering jiggles.
         // Masculine gets medium. Androgynous slightly bouncier than masculine.
+        // Slightly increased from 0.80/0.86 to 0.83/0.88 to prevent perpetual drift.
         impulse *= profile switch
         {
-            BodyProfileType.Feminine  => 0.80f, // very slow settle = ultra-jello
-            BodyProfileType.Masculine => 0.86f,
-            _                         => 0.84f
+            BodyProfileType.Feminine  => 0.83f,
+            BodyProfileType.Masculine => 0.88f,
+            _                         => 0.86f
         };
 
         this.bodyImpulse[key] = impulse;
@@ -4824,6 +4920,19 @@ public sealed class ModEntry : Mod
             var size     = minSz + Game1.random.NextSingle() * (maxSz - minSz);
             var lifetime = Math.Max(60, (int)(baseLT * lifeMult));
 
+            // GroundY: virtual floor plane so particles land and rest instead of
+            // falling off-screen forever.  Per-kind drop height reflects how high the
+            // source is above the isometric ground (trees are tall, tool strikes low).
+            var groundDrop = kind switch
+            {
+                PhysicsParticleKind.WoodSplinter => 40f,
+                PhysicsParticleKind.Sawdust      => 20f,
+                PhysicsParticleKind.StoneChunk   => 32f,
+                PhysicsParticleKind.OreChunk     => 28f,
+                PhysicsParticleKind.GemChunk     => 30f,
+                _                                => 32f,
+            };
+
             var particle = new TypedPhysicsParticle
             {
                 Position         = worldPos + new Vector2(
@@ -4837,6 +4946,7 @@ public sealed class ModEntry : Mod
                 Kind             = kind,
                 Size             = size,
                 HasBounced       = false,
+                GroundY          = worldPos.Y + groundDrop,
             };
             this.typedParticles.Add(particle);
         }
@@ -4886,25 +4996,8 @@ public sealed class ModEntry : Mod
                 _                                => (0.15f, 0.97f, 0.38f, 50f, 0.60f),
             };
 
-            // Gravity
-            p.Velocity.Y += gravity;
-
-            // One-time bounce with per-kind coefficient
-            if (!p.HasBounced && p.AgeTicks > 8 && p.Velocity.Y > 1.8f)
-            {
-                p.Velocity.Y       *= -bounceCoeff;
-                p.Velocity.X       *= 0.70f;
-                p.RotationVelocity *= 1.4f;
-                p.HasBounced        = true;
-            }
-
-            // Air resistance
-            p.Velocity         *= drag;
-            p.RotationVelocity *= drag;
-
-            // Walk-scatter: older particles need a stronger shove ("resting" resistance)
-            // ageResistance ramps from 0 → 1 over the first 120 ticks (2 s).
-            // Fresh particles scatter easily; settled ones need ~3× more force.
+            // ── Walk-scatter: wake resting particles or nudge moving ones ───────
+            // Evaluated first so resting particles can be woken before physics skip.
             if (scatterStr > 0f && playerMoved)
             {
                 var dist = Vector2.Distance(p.Position, playerPos);
@@ -4914,18 +5007,70 @@ public sealed class ModEntry : Mod
                     if (!float.IsNaN(scatterDir.X) && !float.IsNaN(scatterDir.Y))
                     {
                         var falloff         = 1f - dist / scatterRadius;
-                        var ageResistance   = Math.Min(1f, p.AgeTicks / 120f); // 0 fresh → 1 settled
-                        var wakeThreshold   = ageResistance * 0.6f;           // settled needs stronger push
+                        var ageResistance   = Math.Min(1f, p.AgeTicks / 120f);
+                        var wakeThreshold   = ageResistance * 0.6f;
                         var rawMag          = playerVel.Length() * falloff * scatterStr * scatterSensitivity;
                         if (rawMag > wakeThreshold)
                         {
                             var scatterMag         = (rawMag - wakeThreshold) * (1f - ageResistance * 0.5f);
                             p.Velocity            += scatterDir * scatterMag;
+                            p.Velocity.Y          -= scatterMag * 0.4f; // small upward kick when kicked
                             p.RotationVelocity    += (Game1.random.NextSingle() - 0.5f) * scatterMag * 0.2f;
+                            p.IsResting            = false; // wake if resting
                         }
                     }
                 }
             }
+
+            // Skip physics integration for resting particles (only scatter can wake them)
+            if (p.IsResting)
+            {
+                // Slowly slide to a stop (very small residual friction drain)
+                p.Velocity         *= 0.88f;
+                p.RotationVelocity *= 0.85f;
+                p.Position         += p.Velocity;
+                p.Rotation         += p.RotationVelocity;
+                continue;
+            }
+
+            // Gravity
+            p.Velocity.Y += gravity;
+
+            // ── Ground-plane collision (multi-bounce with energy loss) ──────────
+            // Use the stored GroundY as the floor. If GroundY was not set (zero),
+            // fall back to the legacy velocity-threshold approach for compatibility.
+            bool hitGround = p.GroundY > 0f
+                ? p.Position.Y >= p.GroundY
+                : (!p.HasBounced && p.AgeTicks > 8 && p.Velocity.Y > 1.8f);
+
+            if (hitGround && p.Velocity.Y > 0f)
+            {
+                // Clamp position to floor so particles don't sink below
+                if (p.GroundY > 0f)
+                    p.Position.Y = p.GroundY;
+
+                p.BounceCount++;
+                p.HasBounced = true;
+
+                // Energy loss per bounce: coefficient decays with each bounce
+                var bc = bounceCoeff * MathF.Pow(0.65f, p.BounceCount - 1);
+                p.Velocity.Y       *= -bc;
+                p.Velocity.X       *= 0.70f;
+                p.RotationVelocity *= 1.4f;
+
+                // After MaxBounces or when bounce velocity is too small, rest on ground
+                if (p.BounceCount >= TypedPhysicsParticle.MaxBounces
+                    || MathF.Abs(p.Velocity.Y) < 0.6f)
+                {
+                    p.Velocity.Y  = 0f;
+                    p.Position.Y  = p.GroundY > 0f ? p.GroundY : p.Position.Y;
+                    p.IsResting   = true;
+                }
+            }
+
+            // Air resistance
+            p.Velocity         *= drag;
+            p.RotationVelocity *= drag;
 
             // Integrate
             p.Position += p.Velocity;
@@ -5131,6 +5276,149 @@ public sealed class ModEntry : Mod
     /// The 1×1 white Texture2D is created lazily on first use so we don't depend on the
     /// graphics device being ready during Entry().
     /// </summary>
+
+    /// <summary>
+    /// Spawns typed VFX particles when the player interacts with crafting stations nearby:
+    ///   Forge / Anvil   → spark burst (OreChunk) + hot-metal sawdust
+    ///   Furnace         → spark + stone-dust plume
+    ///   Workbench       → wood splinters + sawdust
+    ///   Mill / Stone tools → stone micro-chips
+    /// Only fires when a tool or action button is used close to the station.
+    /// </summary>
+    private void TryApplyCraftingStationVfx(Farmer player)
+    {
+        if (Game1.currentLocation is null) return;
+
+        var playerPos = player.Position;
+        var tilePos   = playerPos / 64f;
+        var checkTile = new Vector2((int)tilePos.X, (int)tilePos.Y);
+
+        // Direction offset — check the tile the player is facing
+        var facingOffset = player.FacingDirection switch
+        {
+            0 => new Vector2(0f, -1f),
+            1 => new Vector2(1f,  0f),
+            2 => new Vector2(0f,  1f),
+            3 => new Vector2(-1f, 0f),
+            _ => Vector2.Zero
+        };
+
+        // Check each adjacent tile + facing tile for crafting objects
+        var tilesToCheck = new[]
+        {
+            checkTile,
+            checkTile + facingOffset,
+            checkTile + new Vector2(facingOffset.Y, facingOffset.X),
+            checkTile - new Vector2(facingOffset.Y, facingOffset.X),
+        };
+
+        foreach (var tile in tilesToCheck)
+        {
+            if (!Game1.currentLocation.objects.TryGetValue(tile, out var obj)) continue;
+            if (obj is null) continue;
+
+            var name = obj.Name ?? string.Empty;
+            var spawnPos = tile * 64f + new Vector2(32f, 32f);
+
+            if (ContainsAny(name, "forge", "anvil"))
+            {
+                // Forge: hot-metal sparks + flying metal chips
+                this.SpawnTypedDebris(spawnPos, PhysicsParticleKind.OreChunk,   2 + Game1.random.Next(3), 1.4f);
+                this.SpawnTypedDebris(spawnPos, PhysicsParticleKind.Sawdust,    3 + Game1.random.Next(3), 0.8f);
+                return;
+            }
+            if (ContainsAny(name, "furnace", "kiln"))
+            {
+                // Furnace: hot sparks + stone dust
+                this.SpawnTypedDebris(spawnPos, PhysicsParticleKind.StoneChunk, 2 + Game1.random.Next(2), 1.2f);
+                this.SpawnTypedDebris(spawnPos, PhysicsParticleKind.Sawdust,    3 + Game1.random.Next(3), 0.6f);
+                return;
+            }
+            if (ContainsAny(name, "workbench", "crafting", "table", "bench"))
+            {
+                // Workbench: sawdust + wood chips
+                this.SpawnTypedDebris(spawnPos, PhysicsParticleKind.WoodSplinter, 3 + Game1.random.Next(3), 1.0f);
+                this.SpawnTypedDebris(spawnPos, PhysicsParticleKind.Sawdust,      4 + Game1.random.Next(3), 0.5f);
+                return;
+            }
+            if (ContainsAny(name, "mill", "grinder", "crusher", "stone"))
+            {
+                // Mill / crusher: stone micro-chips
+                this.SpawnTypedDebris(spawnPos, PhysicsParticleKind.StoneChunk, 3 + Game1.random.Next(3), 1.1f);
+                this.SpawnTypedDebris(spawnPos, PhysicsParticleKind.Sawdust,    2 + Game1.random.Next(2), 0.5f);
+                return;
+            }
+            if (ContainsAny(name, "geode", "crystal", "gem", "prism"))
+            {
+                // Geode crusher: gem/crystal shards
+                this.SpawnTypedDebris(spawnPos, PhysicsParticleKind.GemChunk, 3 + Game1.random.Next(4), 1.5f);
+                this.SpawnTypedDebris(spawnPos, PhysicsParticleKind.Sawdust,  2 + Game1.random.Next(2), 0.5f);
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// When the player bumps into furniture with a tool swing or walks into it while running,
+    /// apply a small spring recoil to the player's body and spawn matching VFX particles.
+    /// This makes furniture feel physically solid rather than ghost-like.
+    /// </summary>
+    private void TryApplyFurnitureCollisionRecoil(Farmer player, int playerKey)
+    {
+        if (Game1.currentLocation is null) return;
+
+        var playerPos = player.Position;
+        var facingOffset = player.FacingDirection switch
+        {
+            0 => new Vector2(0f, -64f),
+            1 => new Vector2(64f, 0f),
+            2 => new Vector2(0f,  64f),
+            3 => new Vector2(-64f, 0f),
+            _ => Vector2.Zero
+        };
+        var checkPos = playerPos + facingOffset;
+
+        foreach (var furniture in Game1.currentLocation.furniture)
+        {
+            if (furniture is null) continue;
+            var furPos = furniture.TileLocation * 64f + new Vector2(32f, 32f);
+            if (Vector2.Distance(furPos, checkPos) > 96f) continue;
+
+            var fname = furniture.Name ?? string.Empty;
+            var str   = this.config.FurnitureCollisionStrength;
+
+            // Apply recoil in the opposite of facing direction
+            var recoilDir = -Vector2.Normalize(facingOffset);
+            if (float.IsNaN(recoilDir.X)) recoilDir = Vector2.Zero;
+
+            if (this.config.EnableBodyPhysics)
+            {
+                var existing = this.bodyImpulse.TryGetValue(playerKey, out var bi) ? bi : Vector2.Zero;
+                this.bodyImpulse[playerKey] = existing + recoilDir * str * 0.18f;
+            }
+
+            // Spawn VFX depending on furniture material
+            if (this.config.EnableTypedPhysicsDebris)
+            {
+                if (ContainsAny(fname, "wood", "table", "chair", "desk", "cabinet", "shelf", "bed",
+                                        "drawer", "chest", "dresser", "bookcase", "fence", "door"))
+                {
+                    this.SpawnTypedDebris(furPos, PhysicsParticleKind.WoodSplinter, 2 + Game1.random.Next(2), 0.7f);
+                    this.SpawnTypedDebris(furPos, PhysicsParticleKind.Sawdust, 2, 0.4f);
+                }
+                else if (ContainsAny(fname, "stone", "rock", "slate", "cobble", "brick", "granite"))
+                {
+                    this.SpawnTypedDebris(furPos, PhysicsParticleKind.StoneChunk, 2 + Game1.random.Next(2), 0.9f);
+                }
+                else if (ContainsAny(fname, "metal", "iron", "steel", "anvil", "forge", "copper"))
+                {
+                    this.SpawnTypedDebris(furPos, PhysicsParticleKind.OreChunk, 2 + Game1.random.Next(2), 0.8f);
+                }
+            }
+
+            break; // Only react to the first hit furniture per swing
+        }
+    }
     private void RenderTypedParticles(SpriteBatch sb)
     {
         if (this.typedParticles.Count == 0) return;
@@ -6470,6 +6758,49 @@ public sealed class ModEntry : Mod
             () => this.config.AnimalBoneStrength, v => this.config.AnimalBoneStrength = v,
             () => "Animal bone strength",
             () => "Overall intensity multiplier. 0 = off, 1 = default, 2 = maximum jiggle.", 0f, 2f, 0.05f);
+
+        // ── Crafting station VFX ─────────────────────────────────────────────
+        api.AddSectionTitle(this.ModManifest, () => "Crafting Station VFX");
+        api.AddParagraph(this.ModManifest, () =>
+            "Spawn typed physics particles when the player uses crafting stations:\n" +
+            "  Forge / Anvil → hot-metal spark burst + flying chips.\n" +
+            "  Furnace → sparks + stone dust.\n" +
+            "  Workbench → wood splinters + sawdust.\n" +
+            "  Mill / Crusher → stone micro-chips.\n" +
+            "  Geode Crusher → gem/crystal shards.\n" +
+            "Requires 'Enable typed physics debris' to be ON.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableCraftingStationVfx, v => this.config.EnableCraftingStationVfx = v,
+            () => "Enable crafting station VFX",
+            () => "Spawn material-matched particles when using forge, furnace, workbench, mill, or crusher.");
+
+        // ── Furniture collision physics ───────────────────────────────────────
+        api.AddSectionTitle(this.ModManifest, () => "Furniture Collision Physics");
+        api.AddParagraph(this.ModManifest, () =>
+            "When the player swings a tool near furniture, they receive a small spring recoil and " +
+            "the furniture emits matching VFX particles (wood splinters for wood, stone chips for stone, " +
+            "metal sparks for metal). Makes furniture feel physically solid rather than ghost-like.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableFurnitureCollisionPhysics, v => this.config.EnableFurnitureCollisionPhysics = v,
+            () => "Enable furniture collision physics",
+            () => "Body recoil + VFX when swinging a tool at furniture.");
+        api.AddNumberOption(this.ModManifest,
+            () => this.config.FurnitureCollisionStrength, v => this.config.FurnitureCollisionStrength = v,
+            () => "Furniture collision strength",
+            () => "Intensity of the spring recoil on furniture contact. 0 = off, 0.45 = default, 1 = strong.",
+            0f, 1f, 0.05f);
+
+        // ── Terrain footstep effects ──────────────────────────────────────────
+        api.AddSectionTitle(this.ModManifest, () => "Terrain Footstep Effects");
+        api.AddParagraph(this.ModManifest, () =>
+            "Spawn tiny physics particles at the farmer's feet based on the terrain tile they step on: " +
+            "grass/dirt → dust puff, stone/gravel → micro chip, sand → scatter, water → splash ripple, " +
+            "snow → white puff. Low count (1–2 particles per step) for a subtle, immersive feel. " +
+            "Requires 'Enable typed physics debris' to be ON.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableTerrainFootstepEffects, v => this.config.EnableTerrainFootstepEffects = v,
+            () => "Enable terrain footstep effects",
+            () => "Tiny material-matched particles at your feet as you walk on different terrain types.");
 
         // ── Nude sprite + gender-swap detection ───────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "Nude & Gender-Swap Sprite Detection");
