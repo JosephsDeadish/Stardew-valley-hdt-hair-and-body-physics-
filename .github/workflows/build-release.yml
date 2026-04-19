@@ -134,41 +134,53 @@ jobs:
             "https://github.com/Pathoschild/SMAPI/releases/download/${SMAPI_TAG}/SMAPI-${SMAPI_TAG}-installer.zip" \
             -o /tmp/smapi.zip
 
-          # Extract to temp directory
+          # Extract outer installer zip
           unzip -q /tmp/smapi.zip -d /tmp/smapi
 
-          # The SMAPI installer zip contains platform-specific DLLs under
-          # internal/linux/ (not an exe we can run on GitHub-hosted Linux runners).
-          # Directly locate and copy the Linux DLLs.
-          SMAPI_DLL=$(find /tmp/smapi -path "*/internal/linux*" -name "StardewModdingAPI.dll" -type f | head -1)
+          # In SMAPI 4.5+, the installer stores the actual game DLLs inside
+          # install.dat (a zip file) bundled next to the SMAPI.Installer binary
+          # in internal/linux/.  The internal/linux/ folder itself only contains
+          # the installer's own runtime dependencies, not StardewModdingAPI.dll.
+          INSTALL_DAT=$(find /tmp/smapi -path "*/internal/linux/install.dat" -type f | head -1)
 
-          # Fall back to any internal folder
-          if [ -z "$SMAPI_DLL" ]; then
-            SMAPI_DLL=$(find /tmp/smapi -path "*/internal/*" -name "StardewModdingAPI.dll" -type f | head -1)
+          if [ -z "$INSTALL_DAT" ]; then
+            # Fall back: search all platforms
+            INSTALL_DAT=$(find /tmp/smapi -name "install.dat" -type f | head -1)
           fi
 
-          # Last resort: search entire archive
-          if [ -z "$SMAPI_DLL" ]; then
-            SMAPI_DLL=$(find /tmp/smapi -name "StardewModdingAPI.dll" -type f | head -1)
-          fi
-
-          if [ -z "$SMAPI_DLL" ]; then
-            echo "ERROR: StardewModdingAPI.dll not found in SMAPI release"
-            echo "Archive contents:"
-            find /tmp/smapi -type f -name "*.dll" | sort | head -30
-            find /tmp/smapi -type d | sort | head -20
+          if [ -z "$INSTALL_DAT" ]; then
+            echo "ERROR: install.dat not found in SMAPI installer zip."
+            echo "Top-level zip contents:"
+            find /tmp/smapi -type f | sort | head -40
             exit 1
           fi
 
-          SMAPI_DIR="$(dirname "$SMAPI_DLL")"
-          echo "Found SMAPI DLLs in: $SMAPI_DIR"
+          echo "Found install.dat at: $INSTALL_DAT"
 
-          # Copy all DLLs from the SMAPI directory
-          cp "$SMAPI_DIR"/*.dll "$STARDEW_PATH/"
+          # Extract the inner install.dat bundle — this contains StardewModdingAPI.dll
+          # and the smapi-internal/ support folder
+          mkdir -p /tmp/smapi-bundle
+          unzip -q "$INSTALL_DAT" -d /tmp/smapi-bundle
 
-          # Copy smapi-internal folder if present
-          if [ -d "$SMAPI_DIR/smapi-internal" ]; then
-            cp -r "$SMAPI_DIR/smapi-internal" "$STARDEW_PATH/"
+          # Copy StardewModdingAPI.dll to game folder
+          SMAPI_DLL=$(find /tmp/smapi-bundle -name "StardewModdingAPI.dll" -type f | head -1)
+          if [ -z "$SMAPI_DLL" ]; then
+            echo "ERROR: StardewModdingAPI.dll not found inside install.dat"
+            echo "install.dat contents:"
+            find /tmp/smapi-bundle -type f | sort | head -40
+            exit 1
+          fi
+
+          echo "Found StardewModdingAPI.dll at: $SMAPI_DLL"
+          BUNDLE_DIR="$(dirname "$SMAPI_DLL")"
+
+          # Copy the main SMAPI DLL and any sibling DLLs
+          cp "$BUNDLE_DIR"/*.dll "$STARDEW_PATH/" 2>/dev/null || true
+          cp "$SMAPI_DLL" "$STARDEW_PATH/StardewModdingAPI.dll"
+
+          # Copy smapi-internal support folder
+          if [ -d "$BUNDLE_DIR/smapi-internal" ]; then
+            cp -r "$BUNDLE_DIR/smapi-internal" "$STARDEW_PATH/"
           fi
 
           # Verify
