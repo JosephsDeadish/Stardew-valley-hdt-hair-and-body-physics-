@@ -129,44 +129,46 @@ jobs:
             | python3 -c "import json,sys; print(json.load(sys.stdin)['tag_name'])")
           echo "Latest SMAPI: $SMAPI_TAG"
 
-          # Download installer zip (Linux installer contains all the DLLs we need)
+          # Download installer zip
           curl -sL \
             "https://github.com/Pathoschild/SMAPI/releases/download/${SMAPI_TAG}/SMAPI-${SMAPI_TAG}-installer.zip" \
             -o /tmp/smapi.zip
 
-          # Extract the internal/linux folder which has StardewModdingAPI.dll
+          # Extract the archive
           unzip -q /tmp/smapi.zip -d /tmp/smapi
 
-          # Copy SMAPI runtime DLLs into the game folder so the build can reference them
-          # Search under internal/* to handle any platform subdirectory (linux, macOS, windows, etc.)
-          SMAPI_DLL=$(find /tmp/smapi -path "*/internal/*" -name "StardewModdingAPI.dll" -type f | head -1)
-          # Fall back to any location in case the archive layout changes again
-          if [ -z "$SMAPI_DLL" ]; then
-            SMAPI_DLL=$(find /tmp/smapi -name "StardewModdingAPI.dll" -type f | head -1)
+          # In SMAPI 4.x the installer zip no longer ships StardewModdingAPI.dll as a
+          # standalone file.  The DLL is embedded as a resource inside the installer
+          # executable and is only written to disk when the installer runs.
+          # Find the installer exe (skip the internal/ shim folders).
+          INSTALLER_EXE=$(find /tmp/smapi -name "*.exe" ! -path "*/internal/*" | head -1)
+          if [ -z "$INSTALLER_EXE" ]; then
+            INSTALLER_EXE=$(find /tmp/smapi -name "*.exe" | head -1)
           fi
 
-          if [ -z "$SMAPI_DLL" ]; then
-            echo "ERROR: StardewModdingAPI.dll not found in SMAPI release"
-            echo "Contents of /tmp/smapi:"
-            find /tmp/smapi -type f -name "*.dll" | head -20
+          if [ -z "$INSTALLER_EXE" ]; then
+            echo "ERROR: SMAPI installer executable not found in archive"
+            echo "Archive contents:"
+            find /tmp/smapi -type f | sort | head -40
             exit 1
           fi
+          echo "Running SMAPI installer: $INSTALLER_EXE"
 
-          SMAPI_DIR="$(dirname "$SMAPI_DLL")"
-          echo "Found SMAPI DLLs in: $SMAPI_DIR"
-
-          # Copy all DLLs from the SMAPI directory
-          cp "$SMAPI_DIR"/*.dll "$STARDEW_PATH/"
-
-          # Copy smapi-internal folder if present
-          if [ -d "$SMAPI_DIR/smapi-internal" ]; then
-            cp -r "$SMAPI_DIR/smapi-internal" "$STARDEW_PATH/"
-          fi
+          # Run the installer non-interactively.
+          # --install skips the "install/uninstall" menu.
+          # --game-path provides the target directory so no path prompt appears.
+          # SMAPI_NO_TERMINAL=1 suppresses any "press any key" pause at the end.
+          # Redirect stdin from /dev/null to prevent any remaining interactive reads.
+          SMAPI_NO_TERMINAL=1 dotnet "$INSTALLER_EXE" \
+            --install --game-path "$STARDEW_PATH" </dev/null 2>&1 || true
 
           # Verify
           if [ ! -f "$STARDEW_PATH/StardewModdingAPI.dll" ]; then
-            echo "ERROR: StardewModdingAPI.dll not copied into game folder."
-            ls "$STARDEW_PATH/"
+            echo "ERROR: StardewModdingAPI.dll not found after running installer."
+            echo "Game folder:"
+            ls -la "$STARDEW_PATH/"
+            echo "Archive structure:"
+            find /tmp/smapi -type f | sort | head -40
             exit 1
           fi
           echo "SMAPI installed into game folder."
