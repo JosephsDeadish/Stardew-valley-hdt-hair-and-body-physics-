@@ -32,6 +32,8 @@ public sealed class ModEntry : Mod
 
     // ── Hit tracking ──────────────────────────────────────────────────────────
     private int lastPlayerHealth = -1;
+    private bool wasSwimming = false;
+    private int waterEmergenceTicksRemaining = 0;
 
     // ── Hitstop ───────────────────────────────────────────────────────────────
     private int hitstopTicksRemaining = 0;
@@ -103,6 +105,23 @@ public sealed class ModEntry : Mod
             this.lastPlayerHealth = hp;
         }
 
+        // Water emergence: detect when farmer exits the water — droop hair for several ticks
+        if (this.config.EnableWaterEmergenceHairDroop && Game1.player is not null)
+        {
+            var nowSwimming = Game1.player.swimming.Value;
+            if (this.wasSwimming && !nowSwimming)
+            {
+                this.waterEmergenceTicksRemaining = 90; // ~1.5 seconds of wet-hair droop
+            }
+
+            this.wasSwimming = nowSwimming;
+        }
+
+        if (this.waterEmergenceTicksRemaining > 0)
+        {
+            this.waterEmergenceTicksRemaining--;
+        }
+
         if (e.IsMultipleOf(300))
         {
             this.UpdateWindStrength();
@@ -128,6 +147,18 @@ public sealed class ModEntry : Mod
             this.SimulateIdle(character, velocity);
             this.TryApplyLowHealthRagdoll(character, velocity);
             this.TickNpcKnockdown(character);
+
+            // Horse rider physics: while mounted, the rider gets extra vertical bounce from hoofbeats
+            if (this.config.EnableHorseRiderPhysics && character is Farmer mountedFarmer && mountedFarmer.isRidingHorse())
+            {
+                this.SimulateHorseRiderBounce(mountedFarmer, velocity);
+            }
+
+            // NPC proximity collision: player bumping into an NPC sends a gentle impulse
+            if (this.config.EnableProximityCollisionImpulse && character is not Farmer)
+            {
+                this.TryApplyProximityCollisionImpulse(character);
+            }
 
             this.lastPositions[key] = current;
         }
@@ -256,6 +287,8 @@ public sealed class ModEntry : Mod
         this.grassBendVelocity = Vector2.Zero;
         this.hitstopTicksRemaining = 0;
         this.lastPlayerHealth = -1;
+        this.wasSwimming = false;
+        this.waterEmergenceTicksRemaining = 0;
     }
 
     private void LoadData(IModHelper helper)
@@ -296,6 +329,7 @@ public sealed class ModEntry : Mod
         this.config.MonsterArchetypeStrength = preset.MonsterArchetypeStrength;
         this.config.FarmAnimalPhysicsStrength = preset.FarmAnimalPhysicsStrength;
         this.config.EnvironmentalPhysicsStrength = preset.EnvironmentalPhysicsStrength;
+        this.config.DebrisPhysicsStrength = preset.DebrisPhysicsStrength;
     }
 
     // ── Wind detection ────────────────────────────────────────────────────────
@@ -908,6 +942,21 @@ public sealed class ModEntry : Mod
             return;
         }
 
+        // Water emergence: hair is soaking wet for ~1.5 s after leaving the water — heavy downward droop
+        // that gradually dries off as the tick counter decays.
+        if (this.config.EnableWaterEmergenceHairDroop
+            && character is Farmer emergingFarmer
+            && this.waterEmergenceTicksRemaining > 0)
+        {
+            var wetFactor = this.waterEmergenceTicksRemaining / 90f; // 1.0 → 0.0 as it dries
+            impulse += new Vector2(
+                (Game1.random.NextSingle() - 0.5f) * 0.005f,
+                0.025f * wetFactor) * this.config.HairStrength; // strong downward drip
+            impulse *= 0.90f;
+            this.hairImpulse[key] = impulse;
+            return;
+        }
+
         // Rain: heavier hair — downward droop, dampened lateral flow
         if (this.currentRainStrength > 0f && isOutdoors)
         {
@@ -1463,6 +1512,110 @@ public sealed class ModEntry : Mod
         return DebrisWeightClass.Medium;
     }
 
+    // ── Horse rider physics ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// While the farmer is riding a horse, apply extra vertical bounce from hoofbeats.
+    /// Each full stride sends a downward-then-up impulse based on the horse's movement speed.
+    /// Works with vanilla and mod-added rideable horses/mounts.
+    /// Hair also bounces visibly with each stride.
+    /// </summary>
+    private void SimulateHorseRiderBounce(Farmer farmer, Vector2 velocity)
+    {
+        if (velocity.LengthSquared() < 0.5f)
+        {
+            return;
+        }
+
+        var key = this.GetCharacterKey(farmer);
+        var profile = this.detector.Resolve(farmer);
+        var baseStrength = profile switch
+        {
+            BodyProfileType.Feminine => (this.config.FemaleBreastStrength + this.config.FemaleButtStrength) / 2f,
+            BodyProfileType.Masculine => (this.config.MaleButtStrength + this.config.MaleGroinStrength) / 2f,
+            _ => 0.35f
+        };
+
+        // Hoofbeat rhythm: strong downward impulse every ~18 ticks (≈3 per second at 60fps)
+        if (Game1.ticks % 18 == key % 18)
+        {
+            var bounceImpulse = new Vector2(
+                (Game1.random.NextSingle() - 0.5f) * 0.05f,
+                0.25f * baseStrength); // downward jolt
+
+            var bodyEntry = this.bodyImpulse.TryGetValue(key, out var bi) ? bi : Vector2.Zero;
+            this.bodyImpulse[key] = bodyEntry + bounceImpulse;
+
+            // Hair bounces up as rider is jolted down, then falls back
+            if (this.config.EnableHairPhysics)
+            {
+                var hairEntry = this.hairImpulse.TryGetValue(key, out var hi) ? hi : Vector2.Zero;
+                this.hairImpulse[key] = hairEntry + new Vector2(
+                    bounceImpulse.X * 0.5f, -bounceImpulse.Y * 0.8f) * this.config.HairStrength;
+            }
+        }
+    }
+
+    // ── Proximity collision impulse ───────────────────────────────────────────
+
+    /// <summary>
+    /// When the player walks close enough to an NPC to be bumping into them, apply a gentle
+    /// body impulse away from the player. Models the "brush past" collision that should cause
+    /// a brief jiggle — realistic for walking through a crowd.
+    /// No damage, no relationship impact — purely visual physics effect.
+    /// Compatible with all NPCs including mod-added characters.
+    /// </summary>
+    private void TryApplyProximityCollisionImpulse(Character character)
+    {
+        if (Game1.player is null)
+        {
+            return;
+        }
+
+        var dist = Vector2.Distance(character.Position, Game1.player.Position);
+        if (dist > 40f || dist < 0.001f)
+        {
+            return;
+        }
+
+        // Only apply occasionally so it doesn't look like a constant vibration
+        if (Game1.ticks % 8 != 0)
+        {
+            return;
+        }
+
+        var profile = this.detector.Resolve(character);
+        var strength = profile switch
+        {
+            BodyProfileType.Feminine => (this.config.FemaleBreastStrength + this.config.FemaleButtStrength) / 2f,
+            BodyProfileType.Masculine => (this.config.MaleButtStrength + this.config.MaleGroinStrength) / 2f,
+            _ => 0.35f
+        };
+
+        var pushDir = character.Position - Game1.player.Position;
+        if (pushDir.LengthSquared() < 0.001f)
+        {
+            return;
+        }
+
+        pushDir = Vector2.Normalize(pushDir);
+        if (float.IsNaN(pushDir.X) || float.IsNaN(pushDir.Y))
+        {
+            return;
+        }
+
+        var key = this.GetCharacterKey(character);
+        var existing = this.bodyImpulse.TryGetValue(key, out var bi) ? bi : Vector2.Zero;
+        // Gentle impulse — just a brush, not a shove
+        this.bodyImpulse[key] = existing + pushDir * (0.18f * strength);
+
+        if (this.config.EnableHairPhysics)
+        {
+            var hairExisting = this.hairImpulse.TryGetValue(key, out var hi) ? hi : Vector2.Zero;
+            this.hairImpulse[key] = hairExisting + pushDir * (0.12f * strength * this.config.HairStrength);
+        }
+    }
+
     // ── GMCM registration ─────────────────────────────────────────────────────
 
     private void RegisterConfigMenu()
@@ -1553,6 +1706,20 @@ public sealed class ModEntry : Mod
             () => "Floating debris (rocks, wood, gems, fiber, etc.) scatter and bounce when walked through or hit. " +
                   "Weight class from debrisPhysics.json: light items fly far, heavy stones barely budge. " +
                   "Compatible with all custom item and mineral mods.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableHorseRiderPhysics, v => this.config.EnableHorseRiderPhysics = v,
+            () => "Enable horse rider physics",
+            () => "Adds hoofbeat-timed body and hair bounce while the farmer is riding a horse or mount. " +
+                  "Faster movement = more visible jiggle. Compatible with all rideable horse mods.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableProximityCollisionImpulse, v => this.config.EnableProximityCollisionImpulse = v,
+            () => "Enable proximity collision impulse",
+            () => "Walking close to an NPC sends a gentle body impulse away from you — simulates bumping into them in a crowd. " +
+                  "No damage, no upset NPCs. Cosmetic jiggle only. Works with all mod-added NPCs.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableWaterEmergenceHairDroop, v => this.config.EnableWaterEmergenceHairDroop = v,
+            () => "Enable water emergence hair droop",
+            () => "When the farmer exits the water, hair droops heavily for ~1.5 seconds as if soaking wet, then dries and returns to normal physics.");
 
         // ── Quick presets ─────────────────────────────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "Quick Presets");

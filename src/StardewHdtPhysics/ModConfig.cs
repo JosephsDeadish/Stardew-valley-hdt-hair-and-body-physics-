@@ -18,6 +18,12 @@ public sealed class ModConfig
     public bool EnableClothingPhysicsModifier { get; set; } = true;
     public bool EnableHitstopEffect { get; set; } = true;
     public bool EnableDebrisPhysics { get; set; } = true;
+    /// <summary>Apply jiggle physics to the farmer while mounted on horse.</summary>
+    public bool EnableHorseRiderPhysics { get; set; } = true;
+    /// <summary>Apply gentle body impulse when the player walks into an NPC.</summary>
+    public bool EnableProximityCollisionImpulse { get; set; } = true;
+    /// <summary>Hair droops heavily for a few ticks after the farmer exits water.</summary>
+    public bool EnableWaterEmergenceHairDroop { get; set; } = true;
 
     // ── Feminine body strengths ───────────────────────────────────────────────
     public float FemaleBreastStrength { get; set; } = 0.75f;

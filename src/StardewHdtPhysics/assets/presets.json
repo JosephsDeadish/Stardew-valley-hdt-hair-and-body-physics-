@@ -13,7 +13,8 @@
     "RagdollKnockbackStrength": 1.0,
     "MonsterArchetypeStrength": 0.35,
     "FarmAnimalPhysicsStrength": 0.3,
-    "EnvironmentalPhysicsStrength": 0.3
+    "EnvironmentalPhysicsStrength": 0.3,
+    "DebrisPhysicsStrength": 0.35
   },
   {
     "Name": "Default",
@@ -29,7 +30,8 @@
     "RagdollKnockbackStrength": 1.5,
     "MonsterArchetypeStrength": 0.55,
     "FarmAnimalPhysicsStrength": 0.45,
-    "EnvironmentalPhysicsStrength": 0.5
+    "EnvironmentalPhysicsStrength": 0.5,
+    "DebrisPhysicsStrength": 0.65
   },
   {
     "Name": "High",
@@ -45,7 +47,8 @@
     "RagdollKnockbackStrength": 2.5,
     "MonsterArchetypeStrength": 0.9,
     "FarmAnimalPhysicsStrength": 0.75,
-    "EnvironmentalPhysicsStrength": 0.9
+    "EnvironmentalPhysicsStrength": 0.9,
+    "DebrisPhysicsStrength": 1.1
   },
   {
     "Name": "ExtraBouncy",
@@ -61,6 +64,7 @@
     "RagdollKnockbackStrength": 3.5,
     "MonsterArchetypeStrength": 1.60,
     "FarmAnimalPhysicsStrength": 1.40,
-    "EnvironmentalPhysicsStrength": 1.60
+    "EnvironmentalPhysicsStrength": 1.60,
+    "DebrisPhysicsStrength": 1.80
   }
 ]

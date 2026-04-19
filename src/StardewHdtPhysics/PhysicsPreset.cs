@@ -16,4 +16,5 @@ public sealed class PhysicsPreset
     public float MonsterArchetypeStrength { get; set; } = 0.55f;
     public float FarmAnimalPhysicsStrength { get; set; } = 0.45f;
     public float EnvironmentalPhysicsStrength { get; set; } = 0.5f;
+    public float DebrisPhysicsStrength { get; set; } = 0.65f;
 }
