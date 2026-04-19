@@ -1,30 +1,9 @@
-# Stardew HDT Physics
+# SVP Collisions, Physics, and Hit Stops
 
-> **Zero hard requirements — plug and play.** Drop into your Mods folder and go.  
-> All options are in `config.json`, or use the optional in-game menu with [Generic Mod Config Menu (GMCM)](https://www.nexusmods.com/stardewvalley/mods/5098).
-
----
-
-## Features
-
-| System | What it does |
-|---|---|
-| **Body physics** | Jiggle impulses for feminine (breast, butt, thigh, belly) and masculine (butt, groin, thigh, belly) characters triggered by movement, hits, and explosions |
-| **HDT Hair physics** | Flowing/bouncy motion on ALL hair types — vanilla, mod-added, and Fashion Sense hairs. Reacts to movement, wind, **rain** (wet/droopy), and **snow** (light flutter). Calmer indoors |
-| **Idle motion** | Subtle body sway every ~3 seconds when standing still; automatically cancels when you use a tool |
-| **Ragdoll knockback** | Configurable chance (default 50 %) to receive extra knockback force at ≤ 30 HP |
-| **Monster archetype physics** | Every monster type gets appropriate physics: **Slime** = bouncy jello, **Bat/Ghost** = floppy wings, **Serpent/Grub** = squishy stretch, **Fly/Bug** = wing+leg vibration, **Wolf/Bear** = fur ripple, **Skeleton** = snappy bone clatter. All generic monsters also get physics |
-| **Monster ragdoll** | Ragdoll-style knockback when monsters are struck; ragdolled monsters flatten grass they crash through |
-| **Female monster overlay** | Beast girls, slime girls, funtari slimes and similar mods additionally get humanoid body jiggle on top of their archetype physics |
-| **Farm animal physics** | Body jiggle for all farm animals: light (chicken, duck, rabbit) are bouncier; heavy (cow, sheep, pig) are more grounded. Sword/tool swings cause a cosmetic startle reaction — no damage |
-| **Pet physics** | Cats and dogs included automatically in humanoid NPC physics |
-| **NPC sword knockdown** | Sword swings near NPCs/pets apply a harmless cosmetic knockback — no damage, no anger |
-| **Environmental physics** | Grass bends when you walk through it, flattens under ragdolled bodies, and is disturbed by tool swings |
-| **Item collision physics** | Tool swings disturb grass/debris based on tool weight: pickaxe=heavy rock impact, scythe=wide light sweep, sword=lateral knock. Rock (heavy, round) rolls differently from stick (light, tumbles) |
-| **Wind detection** | Reads game weather, season, and internal wind value. Boosts hair AND grass physics on windy/rainy/stormy days |
-| **Auto profile detection** | Reads live sprite texture names to detect replacer mods; falls back to game gender data |
-| **Manual overrides** | Per-NPC gender override in `config.json` — you always have the final say |
-| **Preset system** | Soft / Default / High presets, selectable in GMCM or via `config.json` |
+> **v0.3.0 — Zero hard requirements — plug and play.**  
+> Drop the mod folder into `Stardew Valley/Mods/` and launch via SMAPI.  
+> All options are in `config.json`, or use the optional in-game menu with  
+> [Generic Mod Config Menu (GMCM)](https://www.nexusmods.com/stardewvalley/mods/5098).
 
 ---
 
@@ -32,98 +11,248 @@
 
 | Dependency | Required? |
 |---|---|
-| [SMAPI 4.0.0+](https://smapi.io) | **Yes** (installs with the game via Stardrop/MO2) |
-| [Generic Mod Config Menu](https://www.nexusmods.com/stardewvalley/mods/5098) | Optional — adds an in-game config UI |
-| Content Patcher | Optional — detected automatically if present |
-| [Fashion Sense](https://www.nexusmods.com/stardewvalley/mods/9969) | Optional — hair physics automatically apply to FS custom hairs |
-
-**No other mods are required.** The mod works fully without GMCM; GMCM just adds the in-game sliders.
+| [SMAPI 4.0.0+](https://smapi.io) | **Yes** — installs automatically via Stardrop |
+| Stardew Valley 1.5.6 – 1.6.x | **Yes** — works on all versions in this range |
+| [Generic Mod Config Menu](https://www.nexusmods.com/stardewvalley/mods/5098) | Optional — adds in-game sliders |
+| [Fashion Sense](https://www.nexusmods.com/stardewvalley/mods/9969) | Optional — auto-detected for FS custom hairs |
 
 ---
 
 ## Installation
 
-### Stardrop Mod Manager (recommended)
+### Option A — Stardrop Mod Manager (easiest)
 
-1. Open **Stardrop Mod Manager**.
+1. Open **[Stardrop](https://github.com/Floogen/Stardrop)**.
 2. Click **Add Mod** → select the downloaded `.zip`.
 3. Enable the mod in your profile and click **Launch**.
 
-### Mod Organizer 2 (MO2)
+Stardrop automatically handles SMAPI and places the mod in the correct folder.
 
-1. In MO2, press **Ctrl+M** (Install Mod) and select the `.zip`.
-2. Activate the mod in the left panel.
-3. Launch Stardew Valley through MO2.
+### Option B — Mod Organizer 2 (MO2)
 
-### Manual Install
+1. Press **Ctrl+M** (Install Mod) and select the `.zip`.
+2. In the file-mapping dialog MO2 shows a tree; confirm  
+   `SVP Collisions, Physics, and Hit Stops\` maps to `Mods\`.
+3. Activate the mod in the left panel and launch Stardew Valley through MO2.
 
-1. Extract the zip.
-2. Copy the `StardewHdtPhysics` folder into your `Stardew Valley/Mods/` directory.  
-   The folder must contain `manifest.json`.
-3. Launch the game via SMAPI (`StardewModdingAPI.exe` / `StardewModdingAPI`).
+### Option C — Manual drag-and-drop
+
+1. Extract the `.zip`.
+2. You will see a folder named exactly:  
+   **`SVP Collisions, Physics, and Hit Stops`**
+3. Copy that **entire folder** (not just its contents) into your Mods directory:
+
+   | Platform | Mods directory |
+   |---|---|
+   | Windows (Steam) | `C:\Program Files (x86)\Steam\steamapps\common\Stardew Valley\Mods\` |
+   | Windows (GOG) | `C:\Games\Stardew Valley\Mods\` |
+   | macOS (Steam) | `~/Library/Application Support/Steam/steamapps/common/Stardew Valley/Mods/` |
+   | Linux (Steam) | `~/.local/share/Steam/steamapps/common/Stardew Valley/Mods/` |
+
+4. The result should look like:
+
+   ```
+   Stardew Valley/
+   └── Mods/
+       └── SVP Collisions, Physics, and Hit Stops/
+           ├── manifest.json           ← SMAPI reads this
+           ├── StardewHdtPhysics.dll
+           └── assets/
+   ```
+
+5. Launch Stardew Valley through SMAPI (`StardewModdingAPI.exe` / `StardewModdingAPI`).
 
 ---
 
-## Configuration (without GMCM)
+## Features
 
-Edit `Mods/StardewHdtPhysics/config.json` after the first launch:
+| System | What it does |
+|---|---|
+| **Body physics** | Jiggle impulses for feminine (breast, butt, thigh, belly) and masculine (butt, groin, thigh, belly). Directional hit impulse from nearest attacker. |
+| **HDT Hair physics** | Flowing/bouncy motion on ALL hair types — vanilla, mod-added, Fashion Sense. Reacts to movement, wind, rain (wet/droopy), snow (flutter), water (buoyant float). |
+| **Clothing flow physics** | Auto-detects flowy (dress/robe/skirt/cape/gown) vs tight (tights/shorts/armor) fabrics. Flowy clothes billow, trail, and flutter; tight clothes cling with minimal lag. Wind, rain, water, and speed all affect cloth. No body clipping. |
+| **Per-profile cycling idles** | Feminine: 8-step cycle (hip rolls, chest pop, sashay pair, curtsy, arm reach, weight shift). Masculine: 8-step cycle (chest puff, shoulder rolls, wide bounce, stomp, flex, stretch). NPCs cycle through a mixed set. Each character has a unique starting offset. |
+| **Monster archetype idles** | Slime = pulsing compression, Bat = wing-fold twitch, Worm = peristaltic wave, Bug = constant wing-buzz, Furry = tail wag, Skeleton = bone rattle, Dragon = deep breathing + wing-flutter, Elemental = sinusoidal energy pulse, Generic = ambient sway. |
+| **Farm animal idles** | Chicken/Duck = head peck, Rabbit = ear twitch, Cow/Goat/Sheep = tail swish + head bob, Pig = sniff-bob, Ostrich = neck sway. All idle when standing still. |
+| **Run-step impulses** | Profile-specific step-rhythm body+hair+clothing impulse at every running stride so physics are visible even during movement. Feminine = hip-led; Masculine = heel-strike dominant. |
+| **Ragdoll knockback** | Configurable chance (default 50 %) to receive extra knockback force at ≤ 30 HP. |
+| **Monster archetype physics** | Slime = bouncy jello, Bat/Ghost = floppy wings, Serpent/Grub = squishy stretch, Fly/Bug = wing+leg vibration, Wolf/Bear = fur ripple, Skeleton = snappy bone clatter, Dragon = wingbeat+tail thrash, Elemental = magical energy fluctuation. |
+| **Farm animal physics** | Body jiggle for all farm animals; tool/sword near them causes cosmetic startle — no damage. |
+| **NPC sword knockdown** | Sword swings near NPCs/pets apply a harmless cosmetic knockback — no damage, no anger. |
+| **Environmental physics** | Grass bends when you walk through it, flattens under ragdolled bodies, disturbed by tools. |
+| **Warp-step impulse** | Body bounce + hair toss + clothing resettlement every time you step through a door or warp. |
+| **Eating/drinking bounce** | Chin-dip body lean + hair swing when the farmer starts eating or drinking. |
+| **Lightning flinch** | Sharp random-direction flinch + electric hair whip + clothing billow + screen flash on lightning strikes. |
+| **Skill level-up bounce** | Joyful body bounce when any skill levels up. |
+| **Weather mod integration** | Detects 12+ weather mods and boosts wind/rain/snow physics accordingly. |
+| **Wind detection** | Reads `Game1.wind`, season, debris-weather flag, and weather mod boosts. Drives hair, grass, and clothing physics. |
+| **Hitstop** | Brief visual freeze on significant hits for impact feedback. |
+| **Horse rider physics** | Extra vertical bounce while riding a horse. |
+| **Magic cast physics** | Body+hair impulse when using magic-type tools (SpaceCore/Magic mod detected). |
+| **Auto profile detection** | Reads live sprite texture names to detect gender profile for any character including mod-added ones. |
+| **Manual overrides** | Per-NPC gender override in `config.json` — `"GenderOverrides": { "Krobus": "Feminine" }`. |
+| **Preset system** | Soft / Default / High / ExtraBouncy presets in GMCM or `config.json`. |
+
+---
+
+## Weather Mod Integration
+
+The following mods are auto-detected at startup. When active they boost physics
+intensity beyond vanilla weather levels:
+
+| Mod | Effect |
+|---|---|
+| More Rain | Boosts rain strength on rainy days |
+| Climate of Ferngill / Climate Control | Boosts rain strength (more extreme weather) |
+| Wind Effects | Reads mod's wind strength value directly |
+| Cloudy Skies | Detected; custom weather types respected |
+| Stardew Valley Expanded | Thundersnow (snow+lightning) → max storm physics |
+| Extreme Weather / Weathervane | Detected; storm flags amplified |
+| Ridgeside Village | Detected; custom area weather supported |
+| Vanilla debris weather | Wind-day flag → strong wind boost |
+| Vanilla lightning storm | Max rain + wind intensity |
+| Green rain (1.6+) | Magical downpour + gentle wind |
+| Thundersnow (SVE) | Snow + max wind |
+
+---
+
+## Compatibility
+
+### Sprite mods (auto-detected by texture name)
+
+| Mod | Keywords | Profile |
+|---|---|---|
+| LewdEW | `lewdew`, `lewd_ew` | Feminine |
+| Valley Girls | `valleygirls`, `valley_girls` | Feminine |
+| XTardew Valley | `xtardew` | Feminine |
+| HornyFur / Furry | `hornyfur`, `horny_fur`, `furfur` | Feminine |
+| Anthro packs | `anthro` | Androgynous |
+| Beast girl / slime girl / monster girl | keywords | Feminine |
+| Funtari slimes | `funtarislime`, `funtari_slime` | Feminine |
+| Creatures and Cuties | `creaturescuties`, `creaturecute` | Androgynous |
+| Pokémon mods | `pokemon`, `stardew_pokemon` | Androgynous |
+| Fashion Sense | detected + custom hairs get physics | — |
+| Ridgeside Village NPCs | texture + named profiles | Androgynous |
+| East Scarp NPCs | texture + named profiles | Mixed |
+| Stardew Valley Expanded NPCs | texture + named profiles | Mixed |
+
+### Known compatible mods
+
+- Generic Mod Config Menu ✔
+- Content Patcher ✔
+- Fashion Sense ✔ (custom FS hairs automatically get hair physics)
+- LewdEW, Valley Girls, XTardew Valley, HornyFur ✔ (auto-detected)
+- All vanilla NPCs, farmer, pets ✔
+- All vanilla farm animals + mod-added animals in Coop/Barn ✔
+- Modded NPCs / humanoids ✔ (falls back to game gender field)
+- Modded monsters (any `IsMonster`) ✔ (archetype auto-detected or Generic)
+- All weather mods listed above ✔
+
+---
+
+## Building from Source
+
+```powershell
+# Windows
+.\build-package.ps1
+# ↑ auto-detects Steam install, builds, copies DLL, creates dist\SVP Collisions, Physics, and Hit Stops.zip
+```
+
+```bash
+# Linux / macOS
+./build-package.sh
+# Same steps as above
+```
+
+Both scripts:
+1. Find your Stardew Valley installation (or accept `--game-path` / `-GamePath`)
+2. Build `src/StardewHdtPhysics/StardewHdtPhysics.csproj` with `dotnet build`
+3. Copy the DLL into `mod/SVP Collisions, Physics, and Hit Stops/`
+4. Create a ready-to-install zip in `dist/`
+
+**Requirements for building:**
+- [.NET 6 SDK](https://dotnet.microsoft.com/download/dotnet/6.0)
+- Stardew Valley installed (provides game DLLs for compilation)
+
+---
+
+## File Structure
+
+```
+Repository
+├── mod/
+│   └── SVP Collisions, Physics, and Hit Stops/    ← drag this folder into Mods/
+│       ├── manifest.json
+│       ├── StardewHdtPhysics.dll                  ← added by build-package script
+│       ├── README.txt
+│       └── assets/
+│           ├── presets.json
+│           ├── spriteProfiles.json
+│           ├── monsterArchetypes.json
+│           └── debrisPhysics.json
+│
+├── src/
+│   └── StardewHdtPhysics/                         ← C# source code
+│       ├── StardewHdtPhysics.csproj
+│       ├── manifest.json
+│       ├── ModEntry.cs
+│       ├── ModConfig.cs
+│       ├── BodyProfile.cs
+│       ├── SpriteProfileDetector.cs
+│       ├── PhysicsPreset.cs
+│       ├── GenericModConfigMenuApi.cs
+│       └── assets/  (same files as mod/assets/)
+│
+├── build-package.ps1                              ← Windows build + package
+├── build-package.sh                               ← Linux/macOS build + package
+└── .github/workflows/validate.yml                ← CI: validates JSON + folder structure
+```
+
+---
+
+## Configuration
+
+Edit `Mods/SVP Collisions, Physics, and Hit Stops/config.json` after the first launch:
 
 ```jsonc
 {
-  // ── System toggles ──────────────────────────────────────────────────────────
-  "EnableBodyPhysics":          true,
-  "EnableHairPhysics":          true,
-  "EnableRagdollKnockback":     true,
-  "EnableIdleMotion":           true,
-  "EnableMonsterBodyPhysics":   true,   // archetype physics for ALL monsters
-  "EnableMonsterRagdoll":       true,   // ragdoll knockback for all monsters
-  "EnableNpcSwordKnockdown":    true,   // harmless cosmetic knockback near NPCs/pets
-  "EnableFarmAnimalPhysics":    true,   // jiggle + tool collision for farm animals
-  "EnableEnvironmentalPhysics": true,   // grass bend, ragdoll flattening
-  "EnableItemCollisionPhysics": true,   // tool swings disturb grass by tool weight
-  "EnableWindDetection":        true,   // boost hair+grass on windy/rainy/snowy days
+  // ── System toggles ────────────────────────────────────────────────────────
+  "EnableBodyPhysics":           true,
+  "EnableHairPhysics":           true,
+  "EnableRagdollKnockback":      true,
+  "EnableIdleMotion":            true,
+  "EnableMonsterBodyPhysics":    true,
+  "EnableMonsterRagdoll":        true,
+  "EnableFarmAnimalPhysics":     true,
+  "EnableEnvironmentalPhysics":  true,
+  "EnableWindDetection":         true,
+  "EnableClothingFlowPhysics":   true,
 
-  // ── Preset (overrides all individual strengths) ──────────────────────────────
-  "Preset": "Default",               // "Soft" | "Default" | "High"
+  // ── Preset (overrides all individual strengths) ───────────────────────────
+  "Preset": "Default",   // "Soft" | "Default" | "High" | "ExtraBouncy"
 
-  // ── Feminine body strengths (0 = off, 2 = maximum) ──────────────────────────
-  "FemaleBreastStrength": 0.55,
+  // ── Feminine body strengths (0 = off, 2 = maximum) ───────────────────────
+  "FemaleBreastStrength": 0.75,
   "FemaleButtStrength":   0.50,
   "FemaleThighStrength":  0.40,
   "FemaleBellyStrength":  0.30,
 
-  // ── Masculine body strengths ─────────────────────────────────────────────────
+  // ── Masculine body strengths ──────────────────────────────────────────────
   "MaleButtStrength":     0.45,
   "MaleGroinStrength":    0.45,
   "MaleThighStrength":    0.35,
   "MaleBellyStrength":    0.25,
 
-  // ── HDT Hair ─────────────────────────────────────────────────────────────────
-  // Applies to ALL hair types: vanilla, mod-added, and Fashion Sense custom hairs.
-  // Rain adds downward droop; snow adds light flutter; wind causes flow/trailing.
+  // ── Hair ─────────────────────────────────────────────────────────────────
   "HairStrength":          0.55,
-  "HairWindBoostOutdoors": 1.00,  // multiplier outdoors (higher = longer trail)
-  "HairDampeningIndoors":  0.45,  // multiplier indoors (lower = calmer)
+  "HairWindBoostOutdoors": 1.00,
+  "HairDampeningIndoors":  0.45,
 
-  // ── Ragdoll & knockback ──────────────────────────────────────────────────────
-  "RagdollChanceUnderLowHealth": 0.50,  // 0 = never, 1 = always (at ≤30 HP)
-  "RagdollKnockbackStrength":    1.50,  // push distance (1.5 = default, 4 = extreme)
-  "NpcSwordKnockdownChance":     0.40,  // 0 = never, 1 = always (cosmetic only)
+  // ── Clothing flow ─────────────────────────────────────────────────────────
+  "ClothingFlowStrength":  1.00,
+  "IdleMotionStrength":    1.00,
 
-  // ── Monster physics ──────────────────────────────────────────────────────────
-  // Archetype auto-detected from name: slime/jello/bat/worm/bug/furry/skeleton/generic
-  "MonsterArchetypeStrength": 0.55,
-
-  // ── Farm animal physics ──────────────────────────────────────────────────────
-  // All vanilla + mod-added farm animals. Heavy (cow/pig) vs light (chicken/rabbit)
-  "FarmAnimalPhysicsStrength": 0.45,
-
-  // ── Environmental physics ────────────────────────────────────────────────────
-  "EnvironmentalPhysicsStrength": 0.50, // grass/debris intensity (0 = off, 2 = max)
-
-  // ── Manual gender overrides ──────────────────────────────────────────────────
-  // Highest priority — overrides all auto-detection including live sprite names.
-  // Values: "Feminine" | "Masculine" | "Androgynous"
+  // ── Manual gender overrides (highest priority) ────────────────────────────
   "GenderOverrides": {
     "Krobus": "Feminine"
   }
@@ -134,101 +263,7 @@ Changes take effect when you load a save.
 
 ---
 
-## Compatibility
+## Source & Issues
 
-The mod detects sprite mods by reading live texture asset names at runtime. Built-in keyword rules:
+<https://github.com/JosephsDeadish/Stardew-valley-hdt-hair-and-body-physics->
 
-| Mod category | Keywords detected | Profile |
-|---|---|---|
-| LewdEW | `lewdew`, `lewd_ew` | Feminine |
-| Valley Girls | `valleygirls`, `valley_girls` | Feminine |
-| XTardew Valley | `xtardew` | Feminine |
-| HornyFur / Furry | `hornyfur`, `horny_fur`, `furfur` | Feminine |
-| Anthro packs | `anthro` | Androgynous |
-| Beast girl monsters | `beastgirl`, `beast_girl` | Feminine |
-| Slime girl monsters | `slimegirl`, `slime_girl` | Feminine |
-| Funtari slimes | `funtarislime`, `funtari_slime` | Feminine |
-| Monster girl packs | `monstergirl`, `monster_girl` | Feminine |
-| Creatures and Cuties | `creaturescuties`, `creatures_cuties`, `creaturecute` | Androgynous |
-| Pokémon mods | `pokemon`, `stardew_pokemon` | Androgynous |
-
-Monster archetype rules are in `assets/monsterArchetypes.json` (name keyword → physics model):
-
-| Archetype | Detected by name containing | Physics model |
-|---|---|---|
-| Slime | Slime, Jelly, Sludge, Blob, Ooze | Bouncy jello — high impulse, slow decay, random wobble |
-| Bat | Bat, Ghost, Haunted, Skull, Wisp | Floppy wing flutter — lateral oscillation, fast snap-back |
-| Worm | Serpent, Grub, Duggy, Larva, Crawler | Squishy stretch — Y-axis dominant compression/extension |
-| FlyingBug | Fly, Bug, Moth, Butterfly, Bee | Wing/leg vibration — rapid micro-oscillation |
-| Furry | Wolf, Bear, Fox, Yeti | Fur ripple — gentle wave, slow decay |
-| Skeleton | Skeleton, Bone, Mummy, Undead | Snappy bone clatter — high impulse, very fast decay |
-| Generic | Everything else | Standard physics |
-
-### Known compatible mods
-
-- Generic Mod Config Menu ✔ (optional in-game sliders)
-- Content Patcher ✔
-- **Fashion Sense** ✔ — custom FS hairs automatically receive hair physics
-- LewdEW ✔ (auto-detected)
-- Valley Girls ✔ (auto-detected)
-- XTardew Valley ✔ (auto-detected)
-- HornyFur ✔ (auto-detected)
-- Beast girl / slime girl / funtari slime / monster girl mods ✔ (auto-detected)
-- **Creatures and Cuties** ✔ (auto-detected keyword + generic monster archetype physics)
-- **Pokémon mods** ✔ (auto-detected keywords)
-- All vanilla NPC and farmer sprites ✔
-- All vanilla farm animals + mod-added animals in Coop/Barn ✔
-- Cats and dogs (pets) ✔ (included in NPC humanoid physics)
-- Modded NPCs and humanoids ✔ (falls back to game gender data)
-- Modded monsters (any creature marked IsMonster) ✔ (archetype auto-detected or Generic)
-
-### No conflicts expected with
-
-- Json Assets, Mail Framework Mod, SpaceCore, Expanded Storage
-- Combat overhaul mods — physics is purely cosmetic, no gameplay stats changed
-- Any texture replacer — profile detection reads the active texture name at runtime
-- Wind mods — weather and season heuristics + internal wind field reflection
-- Farm animal mods — any animals in Farm/AnimalHouse locations are enumerated
-
----
-
-## Extending the profile list
-
-Power users can edit `assets/spriteProfiles.json` to add custom texture keyword rules:
-
-```json
-{ "CharacterName": "", "SpriteTextureContains": "mymod_female_", "ProfileType": "Feminine" }
-```
-
-For NPC-name-based rules:
-```json
-{ "CharacterName": "MyModNpc", "SpriteTextureContains": "", "ProfileType": "Feminine" }
-```
-
-To add or change monster archetype detection, edit `assets/monsterArchetypes.json`:
-```json
-{ "NameContains": "MyCustomMonster", "Archetype": "Slime" }
-```
-
-Valid archetypes: `Generic`, `Slime`, `Bat`, `Worm`, `FlyingBug`, `Furry`, `Skeleton`.
-
----
-
-## File Structure
-
-```
-Mods/
-└── StardewHdtPhysics/
-    ├── manifest.json
-    ├── StardewHdtPhysics.dll
-    ├── config.json              ← auto-generated on first run
-    └── assets/
-        ├── presets.json         ← Soft / Default / High presets
-        └── spriteProfiles.json  ← auto-detection keyword rules
-```
-
----
-
-## Source & Issue Tracker
-
-https://github.com/JosephsDeadish/Stardew-valley-hdt-hair-and-body-physics-

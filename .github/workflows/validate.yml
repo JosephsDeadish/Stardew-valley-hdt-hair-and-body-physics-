@@ -1,0 +1,96 @@
+name: Validate Mod Package
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  validate:
+    name: Validate manifest.json and folder structure
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Validate both manifest.json files are well-formed JSON ──────────────
+      - name: Validate source manifest.json
+        run: |
+          echo "Checking src/StardewHdtPhysics/manifest.json ..."
+          python3 -c "import json,sys; json.load(open('src/StardewHdtPhysics/manifest.json')); print('  OK')"
+
+      - name: Validate mod folder manifest.json
+        run: |
+          echo "Checking mod/SVP Collisions, Physics, and Hit Stops/manifest.json ..."
+          python3 -c "import json,sys; json.load(open('mod/SVP Collisions, Physics, and Hit Stops/manifest.json')); print('  OK')"
+
+      # ── Verify both manifests agree on UniqueID and Version ─────────────────
+      - name: Check manifest consistency
+        run: |
+          python3 - <<'EOF'
+          import json, sys
+
+          src = json.load(open("src/StardewHdtPhysics/manifest.json"))
+          mod = json.load(open("mod/SVP Collisions, Physics, and Hit Stops/manifest.json"))
+
+          errors = []
+          for field in ("UniqueID", "Version", "EntryDll", "Name", "Author"):
+              if src.get(field) != mod.get(field):
+                  errors.append(f"  {field}: src='{src.get(field)}'  mod='{mod.get(field)}'")
+
+          if errors:
+              print("ERROR: manifest.json mismatch between src/ and mod/:")
+              for e in errors:
+                  print(e)
+              sys.exit(1)
+          else:
+              print("Manifests are consistent.")
+          EOF
+
+      # ── Validate all asset JSON files ────────────────────────────────────────
+      - name: Validate asset JSON files
+        run: |
+          for f in \
+            "mod/SVP Collisions, Physics, and Hit Stops/assets/presets.json" \
+            "mod/SVP Collisions, Physics, and Hit Stops/assets/spriteProfiles.json" \
+            "mod/SVP Collisions, Physics, and Hit Stops/assets/monsterArchetypes.json" \
+            "mod/SVP Collisions, Physics, and Hit Stops/assets/debrisPhysics.json"
+          do
+            echo "Checking $f ..."
+            python3 -c "import json; json.load(open('$f')); print('  OK')"
+          done
+
+      # ── Check required files exist in the installable mod folder ─────────────
+      - name: Verify installable folder structure
+        run: |
+          required=(
+            "mod/SVP Collisions, Physics, and Hit Stops/manifest.json"
+            "mod/SVP Collisions, Physics, and Hit Stops/README.txt"
+            "mod/SVP Collisions, Physics, and Hit Stops/assets/presets.json"
+            "mod/SVP Collisions, Physics, and Hit Stops/assets/spriteProfiles.json"
+            "mod/SVP Collisions, Physics, and Hit Stops/assets/monsterArchetypes.json"
+            "mod/SVP Collisions, Physics, and Hit Stops/assets/debrisPhysics.json"
+          )
+          missing=0
+          for f in "${required[@]}"; do
+            if [[ -f "$f" ]]; then
+              echo "  FOUND: $f"
+            else
+              echo "  MISSING: $f"
+              missing=1
+            fi
+          done
+          if [[ $missing -ne 0 ]]; then
+            echo "ERROR: Required files are missing from the installable mod folder."
+            exit 1
+          fi
+          echo "All required files present."
+
+      # ── Verify build scripts are present ─────────────────────────────────────
+      - name: Verify build scripts
+        run: |
+          for f in build-package.ps1 build-package.sh; do
+            [[ -f "$f" ]] && echo "  FOUND: $f" || { echo "  MISSING: $f"; exit 1; }
+          done

@@ -4,6 +4,20 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
+
+    <!--
+      AssemblyName controls the DLL filename.  Must match manifest.json "EntryDll".
+      ModFolderName controls the subfolder created in Stardew Valley/Mods/ when you
+      build locally with a valid GamePath.  Spaces and commas are safe on all platforms.
+    -->
+    <AssemblyName>StardewHdtPhysics</AssemblyName>
+    <ModFolderName>SVP Collisions, Physics, and Hit Stops</ModFolderName>
+
+    <!--
+      Silence the "GamePath not found" warning when building in CI or without the game
+      installed.  The project will still compile; it just won't auto-deploy to Mods/.
+    -->
+    <EnableGameDeployment Condition="'$(GamePath)'==''">false</EnableGameDeployment>
   </PropertyGroup>
 
   <ItemGroup>
