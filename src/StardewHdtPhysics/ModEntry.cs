@@ -66,6 +66,14 @@ public sealed class ModEntry : Mod
     // ── Dragon ragdoll cooldown ────────────────────────────────────────────────
     private readonly Dictionary<int, int> dragonRagdollCooldown = new();
 
+    // ── Corpse / stale-entity tracking ───────────────────────────────────────
+    // Keys are character GetCharacterKey() IDs; values are the number of ticks
+    // the entity has been absent from the current location.  When the age exceeds
+    // CorpseDebrisAgeTicks a small bone/dust burst is spawned and the slot is freed.
+    private readonly Dictionary<int, int> corpseAgeTicks = new();
+    // Last known world position for each tracked entity (used to place debris).
+    private readonly Dictionary<int, Vector2> corpseLastPos = new();
+
     // ── Tree fell detection ────────────────────────────────────────────────────
     /// Tile positions of trees present last tick — used to detect tree-fell events.
     private readonly HashSet<Point> prevTreeTiles = new();
@@ -188,6 +196,19 @@ public sealed class ModEntry : Mod
     private void OnDayStarted(object? sender, DayStartedEventArgs e)
     {
         this.UpdateWindStrength();
+
+        // Clear accumulated VFX debris so the new day starts clean.
+        if (this.config.ClearDebrisOnDayReset)
+        {
+            this.typedParticles.Clear();
+            this.itemWorld.Clear();
+        }
+
+        // Purge all physics state for entities that are no longer present —
+        // dead monsters, gone NPCs, relocated farm animals, etc.
+        this.PurgeStaleEntityState(Game1.currentLocation);
+        this.corpseAgeTicks.Clear();
+        this.corpseLastPos.Clear();
     }
 
     private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
@@ -555,6 +576,15 @@ public sealed class ModEntry : Mod
         if (e.IsMultipleOf(300))
         {
             this.UpdateWindStrength();
+            // Periodically evict physics slots for entities that have left the
+            // current location (dead monsters, warped NPCs, relocated animals).
+            this.PurgeStaleEntityState(Game1.currentLocation);
+        }
+
+        // Age any corpse slots — spawn debris when they expire.
+        if (this.config.CorpseDebrisAgeTicks > 0 && this.corpseAgeTicks.Count > 0)
+        {
+            this.TickCorpseDebris();
         }
 
         var location = Game1.currentLocation;
@@ -905,9 +935,126 @@ public sealed class ModEntry : Mod
         this.typedParticles.Clear();
         this.itemWorld.Clear();
         this.prevTreeTiles.Clear();
+        this.corpseAgeTicks.Clear();
+        this.corpseLastPos.Clear();
     }
 
-    private void LoadData(IModHelper helper)
+    // ── Entity pool management ────────────────────────────────────────────────
+
+    /// <summary>
+    /// Builds the set of character keys currently present in <paramref name="location"/>
+    /// (humanoids + monsters + farm animals), then removes physics state for any key
+    /// that is no longer live.  Dead keys are promoted into <see cref="corpseAgeTicks"/>
+    /// so they can dissolve into a small debris burst.
+    /// Also enforces <see cref="ModConfig.MaxPhysicsEntities"/> by evicting the oldest
+    /// stale entries when the pool is over the cap.
+    /// </summary>
+    private void PurgeStaleEntityState(GameLocation? location)
+    {
+        if (location is null) return;
+
+        // Build set of currently-live keys.
+        var liveKeys = new HashSet<int>();
+        foreach (var c in this.EnumerateHumanoids(location))
+            liveKeys.Add(this.GetCharacterKey(c));
+        foreach (var m in this.EnumerateMonsters(location))
+            liveKeys.Add(this.GetCharacterKey(m));
+        foreach (var a in EnumerateFarmAnimals(location))
+            liveKeys.Add(this.GetCharacterKey(a));
+
+        // Find all tracked keys that are no longer live.
+        var deadKeys = new List<int>();
+        foreach (var key in this.lastPositions.Keys)
+        {
+            if (!liveKeys.Contains(key))
+                deadKeys.Add(key);
+        }
+
+        foreach (var key in deadKeys)
+        {
+            // Record last known position for the debris burst, then promote to corpse pool.
+            if (this.config.CorpseDebrisAgeTicks > 0
+                && this.lastPositions.TryGetValue(key, out var pos)
+                && !this.corpseAgeTicks.ContainsKey(key))
+            {
+                this.corpseAgeTicks[key] = 0;
+                this.corpseLastPos[key]  = pos;
+            }
+
+            this.RemoveEntityPhysicsState(key);
+        }
+
+        // Enforce max-entity cap: if still over budget, evict oldest tracked keys.
+        int cap = Math.Max(10, this.config.MaxPhysicsEntities);
+        while (this.lastPositions.Count > cap && this.lastPositions.Count > 0)
+        {
+            int evict = 0;
+            foreach (var k in this.lastPositions.Keys) { evict = k; break; }
+            this.RemoveEntityPhysicsState(evict);
+        }
+    }
+
+    /// <summary>
+    /// Removes all physics state dictionaries for <paramref name="key"/>.
+    /// Does not touch corpseAgeTicks / corpseLastPos.
+    /// </summary>
+    private void RemoveEntityPhysicsState(int key)
+    {
+        this.lastPositions.Remove(key);
+        this.bodyImpulse.Remove(key);
+        this.hairImpulse.Remove(key);
+        this.clothingImpulse.Remove(key);
+        this.monsterBodyImpulse.Remove(key);
+        this.idleCycleStep.Remove(key);
+
+        if (this.boneGroups.TryGetValue(key, out var bg))   { bg.Reset();  this.boneGroups.Remove(key); }
+        if (this.hairChains.TryGetValue(key, out var hc))   { hc.Reset();  this.hairChains.Remove(key); }
+        if (this.wingPairs.TryGetValue(key, out var wp))    { wp.Reset();  this.wingPairs.Remove(key); }
+        if (this.furChains.TryGetValue(key, out var fc))    { fc.Reset();  this.furChains.Remove(key); }
+        if (this.tailChains.TryGetValue(key, out var tc))   { tc.Reset();  this.tailChains.Remove(key); }
+        if (this.animalBones.TryGetValue(key, out var ab))  { ab.Reset();  this.animalBones.Remove(key); }
+
+        this.npcKnockdown.Remove(key);
+        this.farmAnimalKnockdown.Remove(key);
+        this.dragonRagdollCooldown.Remove(key);
+    }
+
+    /// <summary>
+    /// Each tick: age every corpse slot.  When it reaches the configured threshold,
+    /// spawn a small bone/dust burst and free the slot.
+    /// </summary>
+    private void TickCorpseDebris()
+    {
+        if (!this.config.EnableTypedPhysicsDebris) return;
+
+        var expired = new List<int>();
+        foreach (var kv in this.corpseAgeTicks)
+        {
+            int newAge = kv.Value + 1;
+            int threshold = this.config.CorpseDebrisAgeTicks;
+
+            if (newAge >= threshold)
+            {
+                // Spawn a tiny bone/sawdust burst at the last known position.
+                if (this.corpseLastPos.TryGetValue(kv.Key, out var pos))
+                {
+                    int count = 2 + Random.Shared.Next(3); // 2–4 particles
+                    this.SpawnTypedDebris(pos, PhysicsParticleKind.Sawdust, count, 0.6f);
+                }
+                expired.Add(kv.Key);
+            }
+            else
+            {
+                this.corpseAgeTicks[kv.Key] = newAge;
+            }
+        }
+
+        foreach (var key in expired)
+        {
+            this.corpseAgeTicks.Remove(key);
+            this.corpseLastPos.Remove(key);
+        }
+    }
     {
         var profiles = helper.Data.ReadJsonFile<List<SpriteProfile>>("assets/spriteProfiles.json") ?? new List<SpriteProfile>();
         this.presets.Clear();

@@ -334,4 +334,25 @@ public sealed class ModConfig
     /// Example: { "Krobus": "Feminine", "Sam": "Feminine" }
     /// </summary>
     public Dictionary<string, string> GenderOverrides { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    // ── Entity pooling / cleanup ───────────────────────────────────────────────
+    /// <summary>
+    /// Maximum number of entity physics slots (bone groups, hair chains, etc.) that
+    /// can be tracked simultaneously. Oldest stale entries are evicted when this limit
+    /// is reached. Range 50–500. Default 200.
+    /// </summary>
+    public int MaxPhysicsEntities { get; set; } = 200;
+
+    /// <summary>
+    /// How long (in game ticks, 60 ticks ≈ 1 second) a dead entity's physics slot
+    /// lingers before being converted to a small debris/bone burst and discarded.
+    /// Default 420 ≈ 7 seconds. Set to 0 to disable the corpse-dissolve effect.
+    /// </summary>
+    public int CorpseDebrisAgeTicks { get; set; } = 420;
+
+    /// <summary>
+    /// Clear all particle VFX (typed debris, item physics) at the start of each new
+    /// in-game day. Prevents debris accumulation between days.
+    /// </summary>
+    public bool ClearDebrisOnDayReset { get; set; } = true;
 }

@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   validate:
     name: Validate manifest.json and folder structure
@@ -59,7 +62,8 @@ jobs:
             "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/presets.json" \
             "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/spriteProfiles.json" \
             "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/monsterArchetypes.json" \
-            "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/debrisPhysics.json"
+            "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/debrisPhysics.json" \
+            "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/creatureProfiles.json"
           do
             echo "Checking $f ..."
             python3 -c "import json; json.load(open('$f')); print('  OK')"
@@ -76,6 +80,7 @@ jobs:
             "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/spriteProfiles.json"
             "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/monsterArchetypes.json"
             "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/debrisPhysics.json"
+            "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/creatureProfiles.json"
           )
           missing=0
           for f in "${required[@]}"; do
