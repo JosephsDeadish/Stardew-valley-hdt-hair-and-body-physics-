@@ -79,12 +79,18 @@ jobs:
           STARDEW_DIR="$HOME/stardew"
           mkdir -p "$STARDEW_DIR"
 
-          for attempt in 1 2 3; do
+          for attempt in 1 2 3 4 5; do
             echo "Attempt $attempt to download Stardew Valley..."
+
+            # Clean SteamCMD cache to avoid corrupted bootstrap state
+            rm -rf "$HOME/.steamcmd" 2>/dev/null || true
+
+            WAIT_TIME=$((2 ** (attempt - 1)))
 
             if [ -n "${STEAM_GUARD:-}" ]; then
               /usr/games/steamcmd.sh \
                 +@sSteamCmdForcePlatformType linux \
+                +@sSteamCmdForcePlatformBitness 32 \
                 +login "$STEAM_USER" "$STEAM_PASS" "$STEAM_GUARD" \
                 +force_install_dir "$STARDEW_DIR" \
                 +app_update 413150 validate \
@@ -92,17 +98,21 @@ jobs:
             else
               /usr/games/steamcmd.sh \
                 +@sSteamCmdForcePlatformType linux \
+                +@sSteamCmdForcePlatformBitness 32 \
                 +login "$STEAM_USER" "$STEAM_PASS" \
                 +force_install_dir "$STARDEW_DIR" \
                 +app_update 413150 validate \
                 +quit && DOWNLOAD_SUCCESS=1 && break
             fi
 
-            sleep 10
+            if [ $attempt -lt 5 ]; then
+              echo "Download attempt $attempt failed. Waiting ${WAIT_TIME}s before retry..."
+              sleep $WAIT_TIME
+            fi
           done
 
           if [ "${DOWNLOAD_SUCCESS:-}" != "1" ]; then
-            echo "ERROR: Failed to download Stardew Valley after 3 attempts"
+            echo "ERROR: Failed to download Stardew Valley after 5 attempts"
             exit 1
           fi
 
@@ -111,7 +121,7 @@ jobs:
           # Verify the game DLL is present
           if [ ! -f "$STARDEW_DIR/Stardew Valley.dll" ]; then
             echo "ERROR: Stardew Valley.dll not found in $STARDEW_DIR"
-            ls "$STARDEW_DIR"
+            ls -lah "$STARDEW_DIR"
             exit 1
           fi
 
