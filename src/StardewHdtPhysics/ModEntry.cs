@@ -54,11 +54,25 @@ public sealed class ModEntry : Mod
     // ── Hitstop ───────────────────────────────────────────────────────────────
     private int hitstopTicksRemaining = 0;
 
+    // ── Per-character idle cycling state ──────────────────────────────────────
+    // Tracks which step (0-7) each character is on in their per-profile idle cycle.
+    // Different characters start at different offsets so they don't all do the same move.
+    private readonly Dictionary<int, int> idleCycleStep = new();
+
     // ── Optional mod integrations ─────────────────────────────────────────────
     private bool fashionSenseLoaded = false;
     private bool druidModLoaded = false;
     private bool magicModLoaded = false;
     private bool spaceCoreLoaded = false;
+
+    // Weather mod integrations (detected in Entry, used in ReadWeatherModBoosts)
+    private bool moreRainLoaded = false;
+    private bool climateOfFerngillLoaded = false;
+    private bool windEffectsLoaded = false;
+    private bool cloudySkiesLoaded = false;
+    private bool sveWeatherLoaded = false;
+    private bool extremeWeatherLoaded = false;
+    private string detectedWeatherMods = "none";
 
     private ModConfig config = new();
     private SpriteProfileDetector detector = new(Array.Empty<SpriteProfile>());
