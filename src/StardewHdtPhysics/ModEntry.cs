@@ -78,6 +78,12 @@ public sealed class ModEntry : Mod
     private bool druidModLoaded = false;
     private bool magicModLoaded = false;
     private bool spaceCoreLoaded = false;
+    // ── Monster content mods ──────────────────────────────────────────────────
+    private bool nudeMonsterModLoaded    = false;  // naked/nude monster sprite replacers
+    private bool milkyOfMythsLoaded      = false;  // Milky of Myths beast-girl/monster mods
+    private bool monstersAnonymousLoaded = false;  // Monsters Anonymous creature content
+    private bool extraMonsterModLoaded   = false;  // generic "more monsters" / creature packs
+    private string detectedMonsterMods   = "none";
 
     // Weather mod integrations (detected in Entry, used in ReadWeatherModBoosts)
     private bool moreRainLoaded = false;
@@ -125,6 +131,7 @@ public sealed class ModEntry : Mod
         }
 
         this.DetectWeatherMods(helper);
+        this.DetectMonsterMods(helper);
 
         // GMCM registration happens in OnGameLaunched (after all mods have loaded) for correct API availability
 
@@ -159,8 +166,8 @@ public sealed class ModEntry : Mod
     private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
     {
         this.Monitor.Log("╔══════════════════════════════════════════════════════════════╗", LogLevel.Info);
-        this.Monitor.Log("║  SVP Physics, Collisions, Hitstops, Idles, Ragdolls — v0.6.0 ║", LogLevel.Info);
-        this.Monitor.Log("║  HDT wing/fur/tail chains + wood shatter VFX active.         ║", LogLevel.Info);
+        this.Monitor.Log("║  SVP Physics, Collisions, Hitstops, Idles, Ragdolls — v0.7.0 ║", LogLevel.Info);
+        this.Monitor.Log("║  Multi-bone breast chain, nude/swap detection, monster mods.  ║", LogLevel.Info);
         this.Monitor.Log("╠══════════════════════════════════════════════════════════════╣", LogLevel.Info);
         this.Monitor.Log($"║  Body physics:           {(this.config.EnableBodyPhysics ? "ON " : "OFF")}", LogLevel.Info);
         this.Monitor.Log($"║  Hair physics (chain):   {(this.config.EnableHairPhysics ? "ON " : "OFF")} ({this.config.HairChainSegments} segments)", LogLevel.Info);
@@ -196,6 +203,7 @@ public sealed class ModEntry : Mod
         this.Monitor.Log($"║  Druid mod:       {(this.druidModLoaded ? "✓ detected (dragon physics active)" : "not detected (optional)")}", LogLevel.Info);
         this.Monitor.Log($"║  Magic/SpaceCore: {(this.magicModLoaded ? "✓ detected (spell physics active)" : "not detected (optional)")}", LogLevel.Info);
         this.Monitor.Log($"║  Weather mods:    {this.detectedWeatherMods}", LogLevel.Info);
+        this.Monitor.Log($"║  Monster mods:    {this.detectedMonsterMods}", LogLevel.Info);
         this.Monitor.Log($"║  Preset loaded:   {this.config.Preset}", LogLevel.Info);
         this.Monitor.Log("╚══════════════════════════════════════════════════════════════╝", LogLevel.Info);
 
@@ -982,6 +990,65 @@ public sealed class ModEntry : Mod
     }
 
     /// <summary>
+    /// Detect installed monster / creature content mods and log a summary.
+    /// The flags are used by SimulateMonsterBody to apply humanoid body-physics overlays
+    /// to creature-replacement sprites from those mods (nude monster variants, beast-girls,
+    /// exotic creature packs, etc.).
+    /// </summary>
+    private void DetectMonsterMods(IModHelper helper)
+    {
+        var detected = new List<string>();
+
+        // ── Nude / exposed monster sprite replacers ───────────────────────────
+        this.nudeMonsterModLoaded =
+            helper.ModRegistry.IsLoaded("NudeMonsters") ||
+            helper.ModRegistry.IsLoaded("Nude.Monsters") ||
+            helper.ModRegistry.IsLoaded("DustBeauty.NudeMonsters") ||
+            helper.ModRegistry.IsLoaded("naked.monsters") ||
+            helper.ModRegistry.IsLoaded("monster.nude") ||
+            helper.ModRegistry.IsLoaded("SV.NudeMonsters") ||
+            helper.ModRegistry.IsLoaded("nsfw.monsters");
+        if (this.nudeMonsterModLoaded) detected.Add("Nude Monsters");
+
+        // ── Milky of Myths — beast-girl/succubus monster replacers ───────────
+        this.milkyOfMythsLoaded =
+            helper.ModRegistry.IsLoaded("MilkyOfMyths") ||
+            helper.ModRegistry.IsLoaded("Milky.Myths") ||
+            helper.ModRegistry.IsLoaded("milky.of.myths") ||
+            helper.ModRegistry.IsLoaded("MilkyMythsMod") ||
+            helper.ModRegistry.IsLoaded("milkymyths");
+        if (this.milkyOfMythsLoaded) detected.Add("Milky of Myths");
+
+        // ── Monsters Anonymous & creature expansion packs ─────────────────────
+        this.monstersAnonymousLoaded =
+            helper.ModRegistry.IsLoaded("MonstersAnonymous") ||
+            helper.ModRegistry.IsLoaded("monsters.anonymous") ||
+            helper.ModRegistry.IsLoaded("MonsterExpansion") ||
+            helper.ModRegistry.IsLoaded("CreatureExpansion");
+        if (this.monstersAnonymousLoaded) detected.Add("Monsters Anonymous");
+
+        // ── Generic extra-monster packs (Creatures and Cuties, etc.) ─────────
+        this.extraMonsterModLoaded =
+            helper.ModRegistry.IsLoaded("CreaturesAndCuties") ||
+            helper.ModRegistry.IsLoaded("creatures.and.cuties") ||
+            helper.ModRegistry.IsLoaded("MoreMonsters") ||
+            helper.ModRegistry.IsLoaded("more.monsters") ||
+            helper.ModRegistry.IsLoaded("ExtraCreatures") ||
+            helper.ModRegistry.IsLoaded("PokemonMod") ||
+            helper.ModRegistry.IsLoaded("StardewPokemon");
+        if (this.extraMonsterModLoaded) detected.Add("Extra Creatures/Cuties");
+
+        this.detectedMonsterMods = detected.Count > 0 ? string.Join(", ", detected) : "none";
+        if (detected.Count > 0)
+        {
+            this.Monitor.Log(
+                $"Monster content mods detected: {this.detectedMonsterMods} — " +
+                "body/fur/wing physics overlays will apply to modded creature sprites.",
+                LogLevel.Info);
+        }
+    }
+
+    /// <summary>
     /// After vanilla wind/rain/snow has been set, apply boosts from any active weather mods.
     /// Uses safe reflection for 1.5/1.6 cross-version fields (e.g. hasGreenRain).
     /// </summary>
@@ -1680,10 +1747,26 @@ public sealed class ModEntry : Mod
             _ => 0.35f
         };
 
-        // Clothing modifier: heavier outfit slightly dampens physics (realistic cloth resistance)
-        var clothingMult = (this.config.EnableClothingPhysicsModifier && character is Farmer cfm)
-            ? this.GetClothingPhysicsMultiplier(cfm)
-            : 1f;
+        // Clothing modifier: per-region dampening (hat/shoes do NOT reduce breast physics)
+        float breastMult, lowerBodyMult;
+        if (this.config.EnableClothingPhysicsModifier && character is Farmer cfm)
+        {
+            breastMult    = this.GetBreastClothingMult(cfm);
+            lowerBodyMult = this.GetLowerBodyClothingMult(cfm);
+        }
+        else
+        {
+            breastMult = lowerBodyMult = 1f;
+        }
+        // Legacy single mult for places that still need it (belly, base inertia)
+        var clothingMult = (breastMult + lowerBodyMult) * 0.5f;
+
+        // Gender-swap detection: flip profile if sprite texture signals a swap
+        if (this.config.EnableGenderSwapDetection)
+        {
+            var swapped = this.detector.TryGetGenderSwappedProfile(character, profile);
+            if (swapped.HasValue) profile = swapped.Value;
+        }
 
         // Base inertia lag: body resists direction change (mass effect)
         impulse += new Vector2(-velocity.X, -velocity.Y) * ((0.03f + (baseStrength * 0.04f)) * clothingMult);
@@ -1698,9 +1781,9 @@ public sealed class ModEntry : Mod
 
             if (profile == BodyProfileType.Feminine)
             {
-                var bStr  = this.config.FemaleBreastStrength * clothingMult;
-                var buStr = this.config.FemaleButtStrength   * clothingMult;
-                var thStr = this.config.FemaleThighStrength  * clothingMult;
+                var bStr  = this.config.FemaleBreastStrength * breastMult;     // per-region: breast only
+                var buStr = this.config.FemaleButtStrength   * lowerBodyMult;  // per-region: lower body
+                var thStr = this.config.FemaleThighStrength  * lowerBodyMult;
 
                 switch (facing)
                 {
@@ -1765,8 +1848,8 @@ public sealed class ModEntry : Mod
             }
             else if (profile == BodyProfileType.Masculine)
             {
-                var grStr = this.config.MaleGroinStrength * clothingMult;
-                var buStr = this.config.MaleButtStrength  * clothingMult;
+                var grStr = this.config.MaleGroinStrength * lowerBodyMult;
+                var buStr = this.config.MaleButtStrength  * lowerBodyMult;
 
                 // Male groin physics: slinky-style oscillation — side-to-side for N/S, front-back for E/W
                 switch (facing)
@@ -2126,14 +2209,84 @@ public sealed class ModEntry : Mod
     /// More clothing = slightly dampened physics (cloth adds mass and restricts jiggle).
     /// Hat, shirt, pants, and shoes each contribute a small reduction.
     /// </summary>
+    /// <summary>
+    /// Per-region clothing physics multiplier for UPPER BODY (breasts, belly).
+    /// Only shirt reduces breast/belly physics — hat, pants, and boots do NOT cover breasts.
+    /// Returns [0.5, 1.0]: 1.0 = nude/no shirt (full physics), 0.5 = very thick shirt.
+    /// When the sprite is detected as nude, always returns 1.0 regardless of equipped items.
+    /// </summary>
+    private float GetBreastClothingMult(Farmer farmer)
+    {
+        if (this.config.EnableNudePhysicsBoost && this.detector.IsNudeSprite(farmer))
+        {
+            return 1.0f;  // nude sprite — no dampening at all
+        }
+
+        var mult = 1.0f;
+        var shirt = farmer.shirtItem.Value;
+        if (shirt is not null)
+        {
+            // Tight/athletic clothing dampens more; loose/small tops dampen less
+            var name = shirt.Name ?? string.Empty;
+            if (ContainsAny(name, "tight", "sport", "athletic", "armor", "chainmail", "corset", "bodice", "plate"))
+            {
+                mult -= 0.18f;  // heavy shirt dampens breast physics significantly
+            }
+            else if (ContainsAny(name, "crop", "bikini", "swimsuit", "tube", "bra", "halter", "strapless"))
+            {
+                mult -= 0.06f;  // minimal coverage = minimal dampening
+            }
+            else
+            {
+                mult -= 0.10f;  // default shirt
+            }
+        }
+
+        return Math.Clamp(mult, 0.5f, 1.0f);
+    }
+
+    /// <summary>
+    /// Per-region clothing physics multiplier for LOWER BODY (butt, thighs, groin).
+    /// Pants and boots reduce lower-body physics. Hat does NOT.
+    /// Returns [0.5, 1.0].
+    /// </summary>
+    private float GetLowerBodyClothingMult(Farmer farmer)
+    {
+        if (this.config.EnableNudePhysicsBoost && this.detector.IsNudeSprite(farmer))
+        {
+            return 1.0f;
+        }
+
+        var mult = 1.0f;
+        var pants = farmer.pantsItem.Value;
+        if (pants is not null)
+        {
+            var name = pants.Name ?? string.Empty;
+            if (ContainsAny(name, "tight", "jeans", "denim", "armor", "plate", "chainmail", "leggings", "tights"))
+            {
+                mult -= 0.14f;
+            }
+            else if (ContainsAny(name, "shorts", "bikini", "swimsuit", "thong", "briefs", "underwear"))
+            {
+                mult -= 0.04f;
+            }
+            else
+            {
+                mult -= 0.08f;
+            }
+        }
+        if (farmer.boots.Value is not null)
+        {
+            mult -= 0.04f;  // boots reduce thigh movement very slightly
+        }
+
+        return Math.Clamp(mult, 0.5f, 1.0f);
+    }
+
+    /// <summary>Legacy single-value multiplier — kept for any code path that still needs it.</summary>
     private float GetClothingPhysicsMultiplier(Farmer farmer)
     {
-        int clothingCount = 0;
-        if (farmer.hat.Value is not null) clothingCount++;
-        if (farmer.shirtItem.Value is not null) clothingCount++;
-        if (farmer.pantsItem.Value is not null) clothingCount++;
-        if (farmer.boots.Value is not null) clothingCount++;
-        return 1f - (clothingCount * 0.03f);
+        return (this.GetBreastClothingMult(farmer) + this.GetLowerBodyClothingMult(farmer)) * 0.5f;
     }
 
     /// <summary>
@@ -5059,6 +5212,24 @@ public sealed class ModEntry : Mod
             () => this.config.AnimalBoneStrength, v => this.config.AnimalBoneStrength = v,
             () => "Animal bone strength",
             () => "Overall intensity multiplier. 0 = off, 1 = default, 2 = maximum jiggle.", 0f, 2f, 0.05f);
+
+        // ── Nude sprite + gender-swap detection ───────────────────────────────
+        api.AddSectionTitle(this.ModManifest, () => "Nude & Gender-Swap Sprite Detection");
+        api.AddParagraph(this.ModManifest, () =>
+            "When a nudity/body mod replaces a sprite with a nude version (texture name contains keywords " +
+            "like 'nude', 'naked', 'bare', 'undressed'), clothing dampening is removed so full-strength " +
+            "body physics apply even if clothing items are still equipped in the inventory. " +
+            "Compatible with all nude replacer mods, body mods, and NSFW texture packs. " +
+            "When a gender-swap sprite is detected (texture name contains 'genderswap', 'femboy', 'female', " +
+            "etc.), the physics profile is automatically flipped so the correct jiggle model is applied.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableNudePhysicsBoost, v => this.config.EnableNudePhysicsBoost = v,
+            () => "Enable nude sprite physics boost",
+            () => "Remove clothing dampening when a nude sprite is detected. Full body physics apply.");
+        api.AddBoolOption(this.ModManifest,
+            () => this.config.EnableGenderSwapDetection, v => this.config.EnableGenderSwapDetection = v,
+            () => "Enable gender-swap sprite detection",
+            () => "Automatically flip physics profile (feminine/masculine) when sprite texture signals a gender swap.");
 
         // ── Gender overrides ──────────────────────────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "Gender Overrides");

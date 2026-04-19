@@ -75,6 +75,15 @@ public struct BoneState
 /// <summary>
 /// Indices into the <see cref="BoneGroup.Bones"/> array.
 /// Keep in sync with <see cref="BoneGroup.BoneCount"/>.
+///
+/// Breast multi-bone chain (HDT style, index 3–10):
+///   The centre-of-mass BreastL/R bones are the primary spring (slots 3/4).
+///   BreastUpperL/R (slots 7/8) model the upper-breast / cleavage region —
+///     slightly stiffer, moves less on vertical bounce, more lateral splay.
+///   BreastLowerL/R (slots 9/10) model the lower-breast / underside —
+///     softest bone, most Y-bounce, gravity-assisted droop.
+///   Together these three sub-bones per side produce a realistic HDT wave:
+///     Upper → Centre → Lower progressively lags, creating a top-stay/bottom-jiggle motion.
 /// </summary>
 public static class BoneIndex
 {
@@ -83,19 +92,25 @@ public static class BoneIndex
     public const int ThighL      = 1;
     public const int ThighR      = 2;
 
-    // Feminine-specific
+    // Feminine-specific (centre-of-mass breast)
     public const int BreastL = 3;
     public const int BreastR = 4;
     public const int ButtL   = 5;
     public const int ButtR   = 6;
+
+    // Feminine: extra breast bones — HDT multi-bone chain
+    public const int BreastUpperL = 7;   // upper-breast / cleavage apex, stiffer
+    public const int BreastUpperR = 8;
+    public const int BreastLowerL = 9;   // lower-breast / underside, softest + most bounce
+    public const int BreastLowerR = 10;
 
     // Masculine-specific (overlaps feminine slots — same memory, different semantics)
     public const int Groin  = 3;  // alias of BreastL slot for masculine
     public const int MButtL = 5;  // alias of ButtL
     public const int MButtR = 6;  // alias of ButtR
 
-    /// <summary>Total number of body bones per character.</summary>
-    public const int BoneCount = 7;
+    /// <summary>Total number of body bones per character (7 base + 4 extra breast).</summary>
+    public const int BoneCount = 11;
 }
 
 /// <summary>
@@ -118,7 +133,9 @@ public sealed class BoneGroup
     /// Advance all bones one tick using a shared centre-of-mass external force.
     /// Each bone receives a scaled + axis-modified version of the force that
     /// reflects its anatomical role:
-    ///   BreastL/R  — equal Y (vertical bounce) + mirrored X (lateral jello splay)
+    ///   BreastL/R        — equal Y (vertical bounce) + mirrored X (lateral jello splay)
+    ///   BreastUpperL/R   — stiffer, less Y, more lateral (apex stays more in place)
+    ///   BreastLowerL/R   — softest, most Y, gravity droop (underside jiggles most)
     ///   ButtL/R    — strong Y + gentle mirrored X
     ///   BellyCenter— Y-dominant gentle bounce
     ///   ThighL/R   — Y-dominant with mirrored X step bounce
@@ -138,14 +155,32 @@ public sealed class BoneGroup
             var beStr = cfg.FemaleBellyStrength;
             var thStr = cfg.FemaleThighStrength;
 
-            // Breast: strong vertical bounce, lateral jello (mirrored X for L vs R)
+            // ── Centre-of-mass breast (primary, as before) ────────────────────
             var breastForce = new Vector2(centerForce.X, centerForce.Y * 1.20f);
             Bones[BoneIndex.BreastL].Step(
                 new Vector2(-breastForce.X * 0.55f, breastForce.Y) * bStr,
-                stiffness * 0.90f, damping);        // slightly bouncier than body
+                stiffness * 0.90f, damping);
             Bones[BoneIndex.BreastR].Step(
                 new Vector2( breastForce.X * 0.55f, breastForce.Y) * bStr,
                 stiffness * 0.90f, damping);
+
+            // ── Upper breast — cleavage apex (stiffer, less Y, more lateral) ──
+            // Stays more in place; top of breast resists vertical bounce.
+            Bones[BoneIndex.BreastUpperL].Step(
+                new Vector2(-breastForce.X * 0.70f, breastForce.Y * 0.55f) * bStr,
+                stiffness * 1.15f, damping * 1.10f);  // stiffest breast bone
+            Bones[BoneIndex.BreastUpperR].Step(
+                new Vector2( breastForce.X * 0.70f, breastForce.Y * 0.55f) * bStr,
+                stiffness * 1.15f, damping * 1.10f);
+
+            // ── Lower breast — underside (softest, most Y, gravity droop) ─────
+            // Bottom of breast lags the centre by ~2 ticks, swings farther down.
+            Bones[BoneIndex.BreastLowerL].Step(
+                new Vector2(-breastForce.X * 0.40f, breastForce.Y * 1.55f) * bStr,
+                stiffness * 0.72f, damping * 0.80f);  // most elastic breast bone
+            Bones[BoneIndex.BreastLowerR].Step(
+                new Vector2( breastForce.X * 0.40f, breastForce.Y * 1.55f) * bStr,
+                stiffness * 0.72f, damping * 0.80f);
 
             // Butt: strong Y, gentle mirrored X
             Bones[BoneIndex.ButtL].Step(
@@ -158,7 +193,7 @@ public sealed class BoneGroup
             // Belly: moderate Y, tiny X
             Bones[BoneIndex.BellyCenter].Step(
                 new Vector2(centerForce.X * 0.20f, centerForce.Y * 0.90f) * beStr,
-                stiffness * 1.10f, damping * 1.10f);  // slightly stiffer than breast
+                stiffness * 1.10f, damping * 1.10f);
 
             // Thighs: step-rhythm Y + mirrored X
             Bones[BoneIndex.ThighL].Step(
@@ -178,7 +213,7 @@ public sealed class BoneGroup
             // Groin: X-dominant slinky (side-to-side oscillation)
             Bones[BoneIndex.Groin].Step(
                 new Vector2(centerForce.X * 1.20f, centerForce.Y * 0.35f) * grStr,
-                stiffness * 0.85f, damping * 0.90f);  // most elastic bone
+                stiffness * 0.85f, damping * 0.90f);
 
             // Butt: strong Y
             Bones[BoneIndex.MButtL].Step(
@@ -200,6 +235,13 @@ public sealed class BoneGroup
             Bones[BoneIndex.ThighR].Step(
                 new Vector2( centerForce.X * 0.40f, centerForce.Y * 0.80f) * thStr,
                 stiffness * 1.05f, damping);
+
+            // Extra breast slots (indices 7-10) unused for masculine — zero force, spring to rest
+            // This keeps them dormant without requiring separate BoneCount per profile.
+            Bones[BoneIndex.BreastUpperL].Step(Vector2.Zero, stiffness * 2f, damping * 2f);
+            Bones[BoneIndex.BreastUpperR].Step(Vector2.Zero, stiffness * 2f, damping * 2f);
+            Bones[BoneIndex.BreastLowerL].Step(Vector2.Zero, stiffness * 2f, damping * 2f);
+            Bones[BoneIndex.BreastLowerR].Step(Vector2.Zero, stiffness * 2f, damping * 2f);
         }
         else // Androgynous
         {
@@ -233,14 +275,20 @@ public sealed class BoneGroup
     {
         if (profile == BodyProfileType.Feminine)
         {
-            // Dominant: average breast positions (most visible in 2D top-down)
-            var breast = (Bones[BoneIndex.BreastL].Position + Bones[BoneIndex.BreastR].Position) * 0.5f;
+            // Multi-bone breast chain blend:
+            //   Upper (15%) + Centre (35%) + Lower (15%) = 65% breast contribution
+            //   Upper stays more in place (stiffer), Lower jiggles most (softest).
+            var breastUpper = (Bones[BoneIndex.BreastUpperL].Position + Bones[BoneIndex.BreastUpperR].Position) * 0.5f;
+            var breastCentre = (Bones[BoneIndex.BreastL].Position    + Bones[BoneIndex.BreastR].Position)       * 0.5f;
+            var breastLower = (Bones[BoneIndex.BreastLowerL].Position + Bones[BoneIndex.BreastLowerR].Position) * 0.5f;
+            var breastBlend = breastUpper * 0.15f + breastCentre * 0.35f + breastLower * 0.15f;  // = 0.65f total
+
             var butt   = (Bones[BoneIndex.ButtL].Position   + Bones[BoneIndex.ButtR].Position)   * 0.5f;
             var belly  = Bones[BoneIndex.BellyCenter].Position;
             var thigh  = (Bones[BoneIndex.ThighL].Position  + Bones[BoneIndex.ThighR].Position)  * 0.5f;
 
-            // Weighted blend: breast 50%, butt 25%, belly 15%, thighs 10%
-            return breast * 0.50f + butt * 0.25f + belly * 0.15f + thigh * 0.10f;
+            // Weighted blend: breast chain 65%, butt 20%, belly 10%, thighs 5%
+            return breastBlend + butt * 0.20f + belly * 0.10f + thigh * 0.05f;
         }
         else if (profile == BodyProfileType.Masculine)
         {

@@ -78,10 +78,72 @@ public sealed class SpriteProfileDetector
         return BodyProfileType.Androgynous;
     }
 
-    private static bool TryParseProfileType(string value, out BodyProfileType result)
+    /// <summary>
+    /// Returns true if the character's current sprite texture name contains nude/undressed
+    /// keywords, indicating the sprite has been replaced by a nudity/body mod.
+    /// When true the mod skips clothing-based dampening so full body physics apply.
+    /// </summary>
+    public bool IsNudeSprite(Character character)
     {
-        return Enum.TryParse(value, ignoreCase: true, out result);
+        var tex = this.TryGetSpriteTextureName(character);
+        if (string.IsNullOrWhiteSpace(tex)) return false;
+        return ContainsAnyKeyword(tex,
+            "nude", "naked", "undress", "undressed", "bare", "exposed", "topless",
+            "bottomless", "unclothed", "nsfw", "lewd", "ecchi", "hentai",
+            "nudify", "nudified", "skin", "body_nude", "nude_body",
+            "nohat", "noclothes", "no_clothes", "no_shirt", "no_pants",
+            "svp_nude", "naturist");
     }
+
+    /// <summary>
+    /// Checks if the sprite texture name contains keywords that indicate a gender-swap
+    /// (e.g. a normally masculine NPC rendered with a female body mod, or vice-versa).
+    /// Returns the overridden profile if a swap is detected, null if no swap.
+    /// </summary>
+    public BodyProfileType? TryGetGenderSwappedProfile(Character character, BodyProfileType currentProfile)
+    {
+        var tex = this.TryGetSpriteTextureName(character);
+        if (string.IsNullOrWhiteSpace(tex)) return null;
+
+        var texLower = tex.ToLowerInvariant();
+
+        // Explicit female/feminine markers on a masculine-profiled character
+        if (currentProfile == BodyProfileType.Masculine)
+        {
+            if (ContainsAnyKeyword(texLower,
+                "genderswap", "gender_swap", "genderbend", "gender_bend",
+                "female_version", "girl_version", "femalem", "male_to_female",
+                "mtf", "trans_girl", "transgirl", "femboy", "fem_",
+                "female", "girl", "_f_", "_fem"))
+            {
+                return BodyProfileType.Feminine;
+            }
+        }
+
+        // Explicit male/masculine markers on a feminine-profiled character
+        if (currentProfile == BodyProfileType.Feminine)
+        {
+            if (ContainsAnyKeyword(texLower,
+                "genderswap", "gender_swap", "genderbend", "gender_bend",
+                "male_version", "boy_version", "malem", "female_to_male",
+                "ftm", "trans_boy", "transboy", "tomboy", "_m_", "_masc"))
+            {
+                return BodyProfileType.Masculine;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool ContainsAnyKeyword(string text, params string[] keywords)
+    {
+        foreach (var kw in keywords)
+        {
+            if (text.Contains(kw, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
+    }
+
 
     private string TryGetSpriteTextureName(Character character)
     {

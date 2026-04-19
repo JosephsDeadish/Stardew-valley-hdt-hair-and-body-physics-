@@ -152,6 +152,21 @@ public sealed class ModConfig
     /// </summary>
     public float ClothingFlowStrength { get; set; } = 1.0f;
 
+    // ── Nude + gender-swap detection ─────────────────────────────────────────
+    /// <summary>
+    /// When a nude/undressed sprite is detected (texture name contains nude keywords),
+    /// clothing dampening is completely removed so full body physics apply.
+    /// Enabled by default for compatibility with nudity mods and body replacers.
+    /// </summary>
+    public bool EnableNudePhysicsBoost { get; set; } = true;
+
+    /// <summary>
+    /// When a gender-swap sprite is detected (texture name contains swap keywords),
+    /// the physics profile is automatically flipped to match the visual gender.
+    /// Prevents feminine/masculine physics being applied to visually wrong sprites.
+    /// </summary>
+    public bool EnableGenderSwapDetection { get; set; } = true;
+
     // ── Wood shatter VFX ──────────────────────────────────────────────────────
     /// <summary>
     /// Wood splinter/shatter particle effect when axe or sword hits a wooden surface
