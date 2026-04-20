@@ -1,0 +1,41 @@
+// creatureProfiles.json — per-creature physics profile overrides for mod extensibility.
+//
+// Add entries here to give custom creatures their own physics profile without
+// modifying code.  SMAPI / Newtonsoft.Json supports // line comments.
+//
+// Each entry:
+//   NameContains — case-insensitive substring of the creature's display name
+//   Archetype    — (optional) built-in archetype name to map to:
+//                  Generic, Slime, Bat, Worm, FlyingBug, Furry, Skeleton,
+//                  Dragon, Elemental, Bird, HeavyBeast, Insect,
+//                  FarmAnimalHeavy, FarmAnimalLight, PetDog, PetCat, FantasyFamiliar
+//   Profile      — (optional) full profile object with any subset of fields:
+//                  Archetype, Label, DecayRate, VelocityImpulseX, VelocityImpulseY,
+//                  RandomNoiseX, RandomNoiseY, PeriodicPeriod, PeriodicImpulseX,
+//                  PeriodicImpulseY, SinusoidalXFreq, SinusoidalXAmp,
+//                  SinusoidalYFreq, SinusoidalYAmp, VelocityThresholdSq,
+//                  ThresholdNoiseX, ThresholdNoiseY, HasTailChain, HasWings,
+//                  HasFurChain, HasEarBones, TailSegments, FurSegments,
+//                  HitBoneImpulseMult, HitTailFollowMult, HitWingFollowMult,
+//                  HitFurFollowMult, HitHairFollowMult,
+//                  IdleBodyAmplitude, IdleAppendageAmplitude,
+//                  IdleRelaxedScale, IdleAlertScale, IdleTiredScale,
+//                  IdleRelaxedEventRate, IdleAlertEventRate,
+//                  StiffnessMult, DampingMult
+//
+// Idle state scales control how much the creature moves during each behavioural
+// state: IdleRelaxedScale=1.0 (default), IdleAlertScale=0.55 (stiffer/smaller
+// when combat-ready), IdleTiredScale=0.60 (slower when exhausted).
+//
+// Buggy Bugs mod: all creatures whose name contains "Buggy" are already mapped
+// to the Insect archetype in monsterArchetypes.json.  Add specific overrides
+// below if you need finer control per species.
+//
+// Example — skittery Swamp Beetle with extra random noise and faster idle events:
+// { "NameContains": "Swamp Beetle", "Profile": {
+//     "Archetype": "Insect", "Label": "Swamp Beetle",
+//     "DecayRate": 0.74, "RandomNoiseX": 0.022, "RandomNoiseY": 0.014,
+//     "IdleAlertEventRate": 2.0 } }
+
+[
+]

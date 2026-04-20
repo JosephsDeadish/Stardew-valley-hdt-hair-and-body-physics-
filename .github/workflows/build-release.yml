@@ -1,0 +1,276 @@
+name: Build and Release
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Triggers:
+#   • workflow_dispatch — run manually from the GitHub Actions tab
+#     → set "create_release" to true to also publish a GitHub Release
+#   • push of a version tag (v*.*.*) — always creates a release
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   STEAM_USERNAME   — your Steam account username
+#   STEAM_PASSWORD   — your Steam account password
+#   (The account must own Stardew Valley; Steam Guard / 2FA must be disabled.)
+# ──────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Also publish a GitHub Release after building?'
+        type: boolean
+        default: false
+  push:
+    branches: ['main']
+    tags: ['v*.*.*']
+  pull_request:
+    branches: ['main']
+
+permissions:
+  contents: write   # needed to create releases and upload assets
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  MOD_FOLDER: "SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More"
+  DOTNET_VERSION: '6.0.x'
+
+jobs:
+  build:
+    name: Build SVPPhysics.dll
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4.2.2
+
+      # ── 2. .NET SDK ──────────────────────────────────────────────────────────
+      - name: Set up .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v4.3.1
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      # ── 3. Stardew Valley DLLs (compile references only) ─────────────────────
+      # DepotDownloader is a .NET tool that speaks the Steam protocol directly.
+      # Unlike SteamCMD it does not require a self-bootstrapping package, so it
+      # works reliably on GitHub-hosted runners.  We use -filelist to fetch only
+      # the *.dll files (~few MB) rather than the full ~3 GB game install.
+      - name: Cache Stardew Valley game DLLs
+        id: cache-stardew
+        uses: actions/cache@v4
+        with:
+          path: ~/stardew
+          key: stardew-valley-linux-${{ runner.os }}-v3
+
+      - name: Install DepotDownloader
+        if: steps.cache-stardew.outputs.cache-hit != 'true'
+        run: |
+          # DepotDownloader is NOT published as a .NET global tool on NuGet.
+          # Download the pre-built Linux binary directly from GitHub releases instead.
+          DD_VER="2.7.4"
+          DD_URL="https://github.com/SteamRE/DepotDownloader/releases/download/DepotDownloader_${DD_VER}/DepotDownloader-linux-x64.zip"
+          echo "Downloading DepotDownloader ${DD_VER} from GitHub releases..."
+          curl -sL "$DD_URL" -o /tmp/depotdownloader.zip
+          unzip -q /tmp/depotdownloader.zip -d /tmp/depotdownloader
+          chmod +x /tmp/depotdownloader/DepotDownloader
+          /tmp/depotdownloader/DepotDownloader --help 2>&1 | head -3 || true
+          echo "DepotDownloader installed."
+
+      - name: Download Stardew Valley DLLs via DepotDownloader
+        if: steps.cache-stardew.outputs.cache-hit != 'true'
+        env:
+          STEAM_USER: ${{ secrets.STEAM_USERNAME }}
+          STEAM_PASS: ${{ secrets.STEAM_PASSWORD }}
+        run: |
+          # AppID 413150 = Stardew Valley, depot 413153 = Linux
+          STARDEW_DIR="$HOME/stardew"
+          mkdir -p "$STARDEW_DIR"
+
+          # Only download *.dll files — that is all the compiler needs.
+          printf 'regex:.*\\.dll$\n' > /tmp/stardew-filelist.txt
+
+          # Retry up to 5 times with exponential back-off.
+          # Steam CDN can be flaky; retrying usually hits a different mirror.
+          for attempt in 1 2 3 4 5; do
+            echo "Attempt $attempt to download Stardew Valley DLLs..."
+            /tmp/depotdownloader/DepotDownloader \
+              -app 413150 \
+              -depot 413153 \
+              -os linux \
+              -username "$STEAM_USER" \
+              -password "$STEAM_PASS" \
+              -dir "$STARDEW_DIR" \
+              -filelist /tmp/stardew-filelist.txt \
+              && DOWNLOAD_SUCCESS=1 && break
+            WAIT=$(( attempt * 15 ))
+            echo "Attempt $attempt failed. Waiting ${WAIT}s before retry..."
+            sleep "$WAIT"
+          done
+
+          if [ "${DOWNLOAD_SUCCESS:-}" != "1" ]; then
+            echo "ERROR: Failed to download Stardew Valley DLLs after 5 attempts"
+            exit 1
+          fi
+
+      - name: Set STARDEW_PATH
+        run: |
+          echo "STARDEW_PATH=$HOME/stardew" >> "$GITHUB_ENV"
+          if [ ! -f "$HOME/stardew/Stardew Valley.dll" ]; then
+            echo "ERROR: Stardew Valley.dll not found in $HOME/stardew"
+            ls -lah "$HOME/stardew" || true
+            exit 1
+          fi
+          echo "Stardew Valley.dll found (cache-hit=${{ steps.cache-stardew.outputs.cache-hit }})."
+
+      # ── 4. SMAPI ─────────────────────────────────────────────────────────────
+      - name: Install SMAPI into game folder
+        run: |
+          # Fetch the latest SMAPI release tag
+          SMAPI_TAG=$(curl -s https://api.github.com/repos/Pathoschild/SMAPI/releases/latest \
+            | python3 -c "import json,sys; print(json.load(sys.stdin)['tag_name'])")
+          echo "Latest SMAPI: $SMAPI_TAG"
+
+          # Download installer zip
+          curl -sL \
+            "https://github.com/Pathoschild/SMAPI/releases/download/${SMAPI_TAG}/SMAPI-${SMAPI_TAG}-installer.zip" \
+            -o /tmp/smapi.zip
+
+          # Extract outer installer zip
+          unzip -q /tmp/smapi.zip -d /tmp/smapi
+
+          # In SMAPI 4.5+, the installer stores the actual game DLLs inside
+          # install.dat (a zip file) bundled next to the SMAPI.Installer binary
+          # in internal/linux/.  The internal/linux/ folder itself only contains
+          # the installer's own runtime dependencies, not StardewModdingAPI.dll.
+          INSTALL_DAT=$(find /tmp/smapi -path "*/internal/linux/install.dat" -type f | head -1)
+
+          if [ -z "$INSTALL_DAT" ]; then
+            # Fall back: search all platforms
+            INSTALL_DAT=$(find /tmp/smapi -name "install.dat" -type f | head -1)
+          fi
+
+          if [ -z "$INSTALL_DAT" ]; then
+            echo "ERROR: install.dat not found in SMAPI installer zip."
+            echo "Top-level zip contents:"
+            find /tmp/smapi -type f | sort | head -40
+            exit 1
+          fi
+
+          echo "Found install.dat at: $INSTALL_DAT"
+
+          # Extract the inner install.dat bundle — this contains StardewModdingAPI.dll
+          # and the smapi-internal/ support folder
+          mkdir -p /tmp/smapi-bundle
+          unzip -q "$INSTALL_DAT" -d /tmp/smapi-bundle
+
+          # Copy StardewModdingAPI.dll to game folder
+          SMAPI_DLL=$(find /tmp/smapi-bundle -name "StardewModdingAPI.dll" -type f | head -1)
+          if [ -z "$SMAPI_DLL" ]; then
+            echo "ERROR: StardewModdingAPI.dll not found inside install.dat"
+            echo "install.dat contents:"
+            find /tmp/smapi-bundle -type f | sort | head -40
+            exit 1
+          fi
+
+          echo "Found StardewModdingAPI.dll at: $SMAPI_DLL"
+          BUNDLE_DIR="$(dirname "$SMAPI_DLL")"
+
+          # Copy the main SMAPI DLL and any sibling DLLs
+          cp "$BUNDLE_DIR"/*.dll "$STARDEW_PATH/" 2>/dev/null || true
+          cp "$SMAPI_DLL" "$STARDEW_PATH/StardewModdingAPI.dll"
+
+          # Copy smapi-internal support folder
+          if [ -d "$BUNDLE_DIR/smapi-internal" ]; then
+            cp -r "$BUNDLE_DIR/smapi-internal" "$STARDEW_PATH/"
+          fi
+
+          # Verify
+          if [ ! -f "$STARDEW_PATH/StardewModdingAPI.dll" ]; then
+            echo "ERROR: StardewModdingAPI.dll not copied into game folder."
+            ls -la "$STARDEW_PATH/"
+            exit 1
+          fi
+          echo "SMAPI installed into game folder."
+
+      # ── 5. Build ─────────────────────────────────────────────────────────────
+      - name: Build SVPPhysics.dll
+        run: |
+          dotnet build src/StardewHdtPhysics/StardewHdtPhysics.csproj \
+            -c Release \
+            "/p:GamePath=$STARDEW_PATH" \
+            --no-incremental
+          echo "Build succeeded."
+
+      # ── 6. Stage DLL into the installable mod folder ─────────────────────────
+      - name: Stage DLL into mod folder
+        run: |
+          DLL_SRC="src/StardewHdtPhysics/bin/Release/net6.0/SVPPhysics.dll"
+          MOD_DIR="mod/$MOD_FOLDER"
+
+          if [ ! -f "$DLL_SRC" ]; then
+            echo "ERROR: $DLL_SRC not found after build."
+            exit 1
+          fi
+
+          cp "$DLL_SRC"             "$MOD_DIR/SVPPhysics.dll"
+          cp "src/StardewHdtPhysics/manifest.json" "$MOD_DIR/manifest.json"
+          cp "src/StardewHdtPhysics/assets/"*.json  "$MOD_DIR/assets/"
+          echo "Staged files:"
+          ls -lh "$MOD_DIR/"
+
+      # ── 7. Create zip ─────────────────────────────────────────────────────────
+      - name: Create distribution zip
+        run: |
+          mkdir -p dist
+          ZIP_NAME="${MOD_FOLDER}.zip"
+          (cd mod && zip -r "../dist/$ZIP_NAME" "$MOD_FOLDER" -x "*.DS_Store")
+          echo "ZIP_PATH=dist/$ZIP_NAME" >> "$GITHUB_ENV"
+          echo "ZIP_NAME=$ZIP_NAME"       >> "$GITHUB_ENV"
+          echo "Created: dist/$ZIP_NAME ($(du -sh "dist/$ZIP_NAME" | cut -f1))"
+
+      # ── 8. Upload as workflow artifact (always) ───────────────────────────────
+      - name: Upload mod artifact
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: SVP-Physics-Mod
+          path: dist/${{ env.ZIP_NAME }}
+          if-no-files-found: error
+          retention-days: 90
+
+      # ── 9. Create GitHub Release (on tag push OR manual with create_release=true)
+      - name: Determine release version
+        id: version
+        if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.create_release == 'true'
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            # Manual run without tag: use version from manifest.json
+            VER=$(python3 -c "import json; print(json.load(open('src/StardewHdtPhysics/manifest.json'))['Version'])")
+            echo "tag=v${VER}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.create_release == 'true'
+        uses: softprops/action-gh-release@v2.2.2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "SVP Physics ${{ steps.version.outputs.tag }}"
+          body: |
+            ## SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More — ${{ steps.version.outputs.tag }}
+
+            ### Install
+            1. Download **${{ env.ZIP_NAME }}** below.
+            2. Unzip it.
+            3. Copy the `${{ env.MOD_FOLDER }}` folder into your `Stardew Valley/Mods/` directory.
+            4. Launch through SMAPI.
+
+            ### Requirements
+            - SMAPI 4.0.0+
+            - Stardew Valley 1.5.6 or newer
+
+            ### Optional Mods
+            Generic Mod Config Menu (for in-game sliders), Fashion Sense, Stardew Valley Expanded.
+          files: dist/${{ env.ZIP_NAME }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true

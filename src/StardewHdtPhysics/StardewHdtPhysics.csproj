@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+
+    <!--
+      AssemblyName controls the DLL filename.  Must match manifest.json "EntryDll".
+      ModFolderName controls the subfolder created in Stardew Valley/Mods/ when you
+      build locally with a valid GamePath.  Spaces and commas are safe on all platforms.
+    -->
+    <AssemblyName>SVPPhysics</AssemblyName>
+    <ModFolderName>SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More</ModFolderName>
+
+    <!--
+      Silence the "GamePath not found" warning when building in CI or without the game
+      installed.  The project will still compile; it just won't auto-deploy to Mods/.
+    -->
+    <EnableGameDeployment Condition="'$(GamePath)'==''">false</EnableGameDeployment>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Pathoschild.Stardew.ModBuildConfig" Version="4.1.0" />
+  </ItemGroup>
+</Project>

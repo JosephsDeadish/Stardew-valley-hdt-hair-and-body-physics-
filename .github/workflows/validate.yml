@@ -1,0 +1,130 @@
+name: Validate Mod Package
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  validate:
+    name: Validate manifest.json and folder structure
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      # ── Validate both manifest.json files are well-formed JSON ──────────────
+      - name: Validate source manifest.json
+        run: |
+          echo "Checking src/StardewHdtPhysics/manifest.json ..."
+          python3 -c "import json,sys; json.load(open('src/StardewHdtPhysics/manifest.json')); print('  OK')"
+
+      - name: Validate mod folder manifest.json
+        run: |
+          echo "Checking mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/manifest.json ..."
+          python3 -c "import json,sys; json.load(open('mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/manifest.json')); print('  OK')"
+
+      # ── Verify both manifests agree on UniqueID and Version ─────────────────
+      - name: Check manifest consistency
+        run: |
+          python3 - <<'EOF'
+          import json, sys
+
+          src = json.load(open("src/StardewHdtPhysics/manifest.json"))
+          mod = json.load(open("mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/manifest.json"))
+
+          errors = []
+          for field in ("UniqueID", "Version", "EntryDll", "Name", "Author"):
+              if src.get(field) != mod.get(field):
+                  errors.append(f"  {field}: src='{src.get(field)}'  mod='{mod.get(field)}'")
+
+          if errors:
+              print("ERROR: manifest.json mismatch between src/ and mod/:")
+              for e in errors:
+                  print(e)
+              sys.exit(1)
+          else:
+              print("Manifests are consistent.")
+          EOF
+
+      # ── Validate all asset JSON files ────────────────────────────────────────
+      - name: Validate asset JSON files
+        run: |
+          # Helper: strip // line comments before parsing (SMAPI supports them,
+          # but Python's json module does not).
+          strip_and_parse() {
+            python3 - "$1" <<'PYEOF'
+          import sys, re, json
+          text = open(sys.argv[1], encoding="utf-8").read()
+          # Remove // … comments that are not inside a string literal.
+          # Simple approach: strip from // to end-of-line when not preceded by http(s):
+          text = re.sub(r'(?<!:)//[^\n]*', '', text)
+          json.loads(text)
+          print("  OK")
+          PYEOF
+          }
+          for f in \
+            "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/presets.json" \
+            "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/spriteProfiles.json" \
+            "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/monsterArchetypes.json" \
+            "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/debrisPhysics.json" \
+            "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/creatureProfiles.json"
+          do
+            echo "Checking $f ..."
+            strip_and_parse "$f"
+          done
+
+      # ── Check required files exist in the installable mod folder ─────────────
+      - name: Verify installable folder structure
+        run: |
+          # Non-compiled source files that must always be present.
+          required_source=(
+            "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/manifest.json"
+            "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/README.txt"
+            "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/presets.json"
+            "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/spriteProfiles.json"
+            "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/monsterArchetypes.json"
+            "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/debrisPhysics.json"
+            "mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/assets/creatureProfiles.json"
+          )
+          missing=0
+          for f in "${required_source[@]}"; do
+            if [[ -f "$f" ]]; then
+              echo "  FOUND: $f"
+            else
+              echo "  MISSING: $f"
+              missing=1
+            fi
+          done
+          if [[ $missing -ne 0 ]]; then
+            echo "ERROR: Required source files are missing from the installable mod folder."
+            exit 1
+          fi
+          echo "All required source files present."
+
+          # SVPPhysics.dll is a build artifact produced by build-release.yml.
+          # It cannot be built here (no Stardew Valley installation), so we
+          # only warn when it is absent rather than failing the workflow.
+          DLL="mod/SVP Physics, Collisions, Hitstops, Idles, Ragdolls and More/SVPPhysics.dll"
+          if [[ -f "$DLL" ]]; then
+            echo "  FOUND: $DLL"
+          else
+            echo "  NOTE: $DLL not present in this checkout."
+            echo "  This is expected — run build-release.yml (or build locally) to produce the DLL."
+            echo "  The workflow will still pass; DLL presence is validated after build."
+          fi
+
+      # ── Verify build scripts are present ─────────────────────────────────────
+      - name: Verify build scripts
+        run: |
+          for f in build-package.ps1 build-package.sh; do
+            [[ -f "$f" ]] && echo "  FOUND: $f" || { echo "  MISSING: $f"; exit 1; }
+          done
