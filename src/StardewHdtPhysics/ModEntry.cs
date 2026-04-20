@@ -2760,7 +2760,6 @@ public sealed class ModEntry : Mod
                 // Male groin physics: discrete step-based impulses driven by movement velocity.
                 // Previously used Math.Sin(ticks) which caused continuous circular oscillation
                 // even when the character was standing still.  Now only fires on real movement.
-                // Note: 'speed' is already defined in the enclosing scope (line above if/else chain).
                 switch (facing)
                 {
                     case 0: // North: lateral sway from left-right foot alternation
@@ -2779,7 +2778,7 @@ public sealed class ModEntry : Mod
                 }
 
                 // Butt bounce for masculine (all directions)
-                impulse += new Vector2(0f, Math.Abs(velocity.Length()) * buStr * 0.04f);
+                impulse += new Vector2(0f, speed * buStr * 0.04f);
             }
             else // Androgynous
             {
@@ -2830,10 +2829,6 @@ public sealed class ModEntry : Mod
         this.StepBoneGroup(key, profile, impulse, breastMult, lowerBodyMult);
     }
 
-    /// <summary>
-    /// Advance (or lazily create) the BoneGroup for this character by one tick.
-    /// The external force is the body-center impulse computed by SimulateBody.
-    /// </summary>
     /// <summary>
     /// Advance (or lazily create) the BoneGroup for this character by one tick.
     /// The external force is the body-center impulse computed by SimulateBody.
