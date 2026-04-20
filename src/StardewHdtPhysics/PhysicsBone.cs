@@ -243,9 +243,12 @@ public static class BodyAnchorTable
     public static float Get(int boneIndex, int facing)
     {
         if ((uint)facing >= 4 || (uint)boneIndex >= BoneIndex.BoneCount)
-            return 0.5f;
+            return NeutralWeight;
         return Weights[facing, boneIndex];
     }
+
+    // Fallback weight for out-of-range inputs: mid-range so neither suppressed nor amplified.
+    private const float NeutralWeight = 0.5f;
 
     /// <summary>
     /// Per-facing lateral scale for the left or right breast bone.
@@ -304,9 +307,9 @@ public sealed class BoneGroup
     ///   breast is more expressive than the far-side breast in profile views.
     ///   Also affects how chain constraints are weighted per bone.
     /// </summary>
-    // Pull fraction toward parent position each tick for the breast chain.
-    // At 0.18 a parent 0.5 units away exerts ~0.09 units/tick of corrective force
-    // — strong enough to keep the chain connected, gentle enough not to override the spring.
+    // Pull fraction applied each tick to spring each breast sub-bone toward its parent.
+    // At 0.18, a parent 0.5 units away exerts ~0.09 units/tick of corrective force —
+    // strong enough to keep the chain connected, gentle enough not to override the spring.
     private const float BreastChainPull = 0.18f;
 
     public void Step(
@@ -346,27 +349,27 @@ public sealed class BoneGroup
                 stiffness * 1.18f, damping * 1.12f);
 
             // ── Step 2: BreastCenter — main mass, chains toward BreastUpper ───
-            // Chain pull: BreastCenter springs toward its parent (BreastUpper).
-            // This keeps it "attached" to the chest anchor through the upper bone.
-            var toUpperL = Bones[BoneIndex.BreastUpperL].Position - Bones[BoneIndex.BreastL].Position;
-            var toUpperR = Bones[BoneIndex.BreastUpperR].Position - Bones[BoneIndex.BreastR].Position;
+            // Chain-pull vectors: offset from this bone's position toward its parent.
+            // These keep each sub-bone "attached" to the one above it in the chain.
+            var chainPullVecUpperL = Bones[BoneIndex.BreastUpperL].Position - Bones[BoneIndex.BreastL].Position;
+            var chainPullVecUpperR = Bones[BoneIndex.BreastUpperR].Position - Bones[BoneIndex.BreastR].Position;
             Bones[BoneIndex.BreastL].Step(
-                new Vector2(-breastForce.X * latL, breastForce.Y) * bStr + toUpperL * BreastChainPull,
+                new Vector2(-breastForce.X * latL, breastForce.Y) * bStr + chainPullVecUpperL * BreastChainPull,
                 stiffness * 0.88f, damping);
             Bones[BoneIndex.BreastR].Step(
-                new Vector2( breastForce.X * latR, breastForce.Y) * bStr + toUpperR * BreastChainPull,
+                new Vector2( breastForce.X * latR, breastForce.Y) * bStr + chainPullVecUpperR * BreastChainPull,
                 stiffness * 0.88f, damping);
 
             // ── Step 3: BreastLower — softest, chains toward BreastCenter ─────
             // Y 1.80× + chain toward Center → creates the HDT top-stay/bottom-jiggle cascade:
             //   Upper stays → Center lags → Lower swings the most.
-            var toCenterL = Bones[BoneIndex.BreastL].Position - Bones[BoneIndex.BreastLowerL].Position;
-            var toCenterR = Bones[BoneIndex.BreastR].Position - Bones[BoneIndex.BreastLowerR].Position;
+            var chainPullVecCenterL = Bones[BoneIndex.BreastL].Position - Bones[BoneIndex.BreastLowerL].Position;
+            var chainPullVecCenterR = Bones[BoneIndex.BreastR].Position - Bones[BoneIndex.BreastLowerR].Position;
             Bones[BoneIndex.BreastLowerL].Step(
-                new Vector2(-breastForce.X * (latL * 0.58f), breastForce.Y * 1.80f) * bStr + toCenterL * BreastChainPull,
+                new Vector2(-breastForce.X * (latL * 0.58f), breastForce.Y * 1.80f) * bStr + chainPullVecCenterL * BreastChainPull,
                 stiffness * 0.68f, damping * 0.76f);
             Bones[BoneIndex.BreastLowerR].Step(
-                new Vector2( breastForce.X * (latR * 0.58f), breastForce.Y * 1.80f) * bStr + toCenterR * BreastChainPull,
+                new Vector2( breastForce.X * (latR * 0.58f), breastForce.Y * 1.80f) * bStr + chainPullVecCenterR * BreastChainPull,
                 stiffness * 0.68f, damping * 0.76f);
 
             // Butt: strong Y, gentle mirrored X  (pants-covered)
