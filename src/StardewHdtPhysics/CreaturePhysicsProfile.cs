@@ -566,10 +566,10 @@ public static class CreaturePhysicsProfileLibrary
             DecayRate            = 0.82f,
             VelocityImpulseX     = 0.05f,
             VelocityImpulseY     = 0.05f,
-            SinusoidalXFreq      = 0.30f,
-            SinusoidalXAmp       = 0.022f,
-            SinusoidalYFreq      = 0.25f,
-            SinusoidalYAmp       = 0.022f,
+            SinusoidalXFreq      = 0.28f,  // same freq as Y so it oscillates diagonally, not in circles
+            SinusoidalXAmp       = 0.018f,
+            SinusoidalYFreq      = 0.28f,  // same frequency eliminates the Lissajous rotation
+            SinusoidalYAmp       = 0.014f, // slightly lower Y amp to keep motion diagonal not circular
             HitBoneImpulseMult   = 1.1f,
             IdleBodyAmplitude    = 0.012f,
         };

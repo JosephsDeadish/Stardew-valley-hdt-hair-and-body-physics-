@@ -251,6 +251,7 @@ public sealed class ModEntry : Mod
         {
             this.typedParticles.Clear();
             this.itemWorld.Clear();
+            this.dislodgedObjectSettleTicks.Clear();
         }
 
         // Purge all physics state for entities that are no longer present —
@@ -821,6 +822,9 @@ public sealed class ModEntry : Mod
         {
             this.SimulateDebrisPhysics(location);
         }
+
+        // ── Dislodged world-object settle timers — tick every update
+        this.TickDislodgedObjects();
 
         // ── Crop / weed / grass collision for all creatures (every 3rd tick)
         if (this.config.EnableCropWeedCollisionPhysics && e.IsMultipleOf(3))
@@ -1622,11 +1626,12 @@ public sealed class ModEntry : Mod
                 break;
 
             case MonsterPhysicsArchetype.Worm:
-                // Peristaltic wave: sinusoidal Y-dominant with slight phase shift per key
+                // Peristaltic wave: sinusoidal Y-dominant with slight phase shift per key.
+                // Using Sin for both axes prevents the Lissajous/circular orbit that Sin+Cos creates.
                 var phase = (key & 0x1F) * 0.2f;
                 idle = new Vector2(
-                    (float)Math.Sin(t * 0.12f + phase) * 0.012f,
-                    (float)Math.Cos(t * 0.09f + phase) * 0.025f) * strength;
+                    (float)Math.Sin(t * 0.10f + phase) * 0.012f,
+                    (float)Math.Sin(t * 0.10f + phase + 0.8f) * 0.025f) * strength;
                 break;
 
             case MonsterPhysicsArchetype.FlyingBug:
@@ -1663,10 +1668,11 @@ public sealed class ModEntry : Mod
             }
 
             case MonsterPhysicsArchetype.Elemental:
-                // Sinusoidal energy pulse: Lissajous figure for magical shimmering effect
+                // Sinusoidal energy pulse — use Sin for both axes at the same frequency so
+                // motion stays on a diagonal line rather than tracing a Lissajous circle.
                 idle = new Vector2(
-                    (float)Math.Sin(t * 0.20f) * 0.020f,
-                    (float)Math.Cos(t * 0.17f) * 0.020f) * strength;
+                    (float)Math.Sin(t * 0.19f) * 0.020f,
+                    (float)Math.Sin(t * 0.19f) * 0.016f) * strength;
                 break;
 
             case MonsterPhysicsArchetype.Bird:
@@ -1726,10 +1732,11 @@ public sealed class ModEntry : Mod
             }
 
             case MonsterPhysicsArchetype.FantasyFamiliar:
-                // Magical shimmering Lissajous + occasional wing flutter + curious head tilt
+                // Magical shimmer — use Sin for both axes at the same frequency so the
+                // sprite oscillates back-and-forth diagonally, not in Lissajous circles.
                 idle = new Vector2(
-                    (float)Math.Sin(t * 0.18f) * 0.016f,
-                    (float)Math.Cos(t * 0.14f) * 0.016f) * strength;
+                    (float)Math.Sin(t * 0.16f) * 0.016f,
+                    (float)Math.Sin(t * 0.16f) * 0.013f) * strength;
                 if (t % 60 < 4) idle += new Vector2((Game1.random.NextSingle() - 0.5f) * 0.030f, -0.012f) * strength; // wing flutter
                 break;
 
@@ -2176,6 +2183,13 @@ public sealed class ModEntry : Mod
                 // ── World object launch (non-mined rocks/ore veins fly off on sword/axe) ──
                 // Detect any physics-reactive object at the strike tile and send it flying.
                 this.TryLaunchWorldObjectAtTile(strikePos, facingOffset, tool);
+
+                // ── Wrong-tool dislodge: rock/twig hit with non-mining tool gets knocked loose ──
+                // e.g. swinging a sword at a rock dislodges it with physics instead of mining it.
+                if (tool is MeleeWeapon || tool is Hoe)
+                {
+                    this.TryDislodgeWorldObject(strikePos, facingOffset, tool);
+                }
             }
         }
 
@@ -2467,6 +2481,102 @@ public sealed class ModEntry : Mod
                 maxAgeTicks: 800);
         }
     }
+
+    /// <summary>
+    /// When the player strikes a small world object (rock, twig, stick) with the WRONG tool,
+    /// the object is cosmetically "dislodged" — it spawns ItemPhysics chunks that fly in the
+    /// hit direction and bounce on the virtual floor before settling.  The tile is marked in
+    /// <see cref="dislodgedObjectSettleTicks"/> and will be treated as harvestable for the next
+    /// <see cref="DislodgeSettleTicks"/> ticks (~6 s) even without the correct tool.
+    /// If no object exists at the tile the method returns immediately.
+    /// </summary>
+    private void TryDislodgeWorldObject(Vector2 strikePos, Vector2 facingOffset, Tool wrongTool)
+    {
+        if (!this.config.EnableTypedPhysicsDebris) return;
+        if (Game1.currentLocation is null) return;
+
+        var tileKey = new Vector2((int)(strikePos.X / 64), (int)(strikePos.Y / 64));
+        if (!Game1.currentLocation.objects.TryGetValue(tileKey, out var obj)) return;
+        if (obj is null) return;
+
+        var name = obj.Name ?? string.Empty;
+
+        // Only dislodge small objects that make sense (rocks, twigs, sticks)
+        bool isSmallRock = ContainsAny(name, "stone", "rock", "twig", "stick", "branch", "wood", "coal");
+        if (!isSmallRock) return;
+
+        // Mark as dislodged (resets settle timer if already dislodged)
+        var packedTile = ((int)tileKey.X << 16) | (int)tileKey.Y;
+        this.dislodgedObjectSettleTicks[packedTile] = DislodgeSettleTicks;
+
+        // Determine material
+        ItemPhysicsMaterial mat;
+        PhysicsParticleKind kind;
+        float launchSpeed;
+
+        if (ContainsAny(name, "stone", "rock", "coal"))
+        {
+            mat = ItemPhysicsMaterial.Stone;
+            kind = PhysicsParticleKind.StoneChunk;
+            launchSpeed = 2.8f;
+        }
+        else
+        {
+            mat = ItemPhysicsMaterial.Wood;
+            kind = PhysicsParticleKind.WoodSplinter;
+            launchSpeed = 2.2f;
+        }
+
+        var baseDir = Vector2.Normalize(facingOffset);
+        if (float.IsNaN(baseDir.X)) baseDir = new Vector2(0f, -1f);
+
+        // VFX particles at strike point
+        this.SpawnTypedDebris(strikePos, kind, 2 + Game1.random.Next(3), launchSpeed * 0.55f);
+        this.SpawnTypedDebris(strikePos, PhysicsParticleKind.Sawdust, 2 + Game1.random.Next(2), 0.6f);
+
+        // One or two rolling physics chunks that arc and settle
+        for (int i = 0; i < 1 + Game1.random.Next(2); i++)
+        {
+            var spread = (Game1.random.NextSingle() - 0.5f) * MathF.PI * 0.4f;
+            var cos    = MathF.Cos(spread);
+            var sin    = MathF.Sin(spread);
+            var dir    = new Vector2(baseDir.X * cos - baseDir.Y * sin,
+                                     baseDir.X * sin + baseDir.Y * cos);
+            var spd    = launchSpeed * (0.5f + Game1.random.NextSingle() * 0.6f);
+            var vel    = dir * spd + new Vector2(0f, -1.5f);  // upward arc
+            this.itemWorld.Spawn(strikePos, vel, mat,
+                ItemPhysicsShape.Circle, shapeRadius: 3.0f,
+                visualSize: 2.5f + Game1.random.NextSingle() * 1.5f, maxAgeTicks: 900);
+        }
+
+        // Brief hitstop feedback (wrong tool = softer impact feel)
+        if (this.config.EnableHitstopEffect)
+        {
+            this.hitstopTicksRemaining = Math.Max(this.hitstopTicksRemaining, 2);
+            Game1.flashAlpha = Math.Max(Game1.flashAlpha, 0.10f);
+        }
+    }
+
+    /// <summary>
+    /// Decrements settle timers for all dislodged objects.  Called each game tick.
+    /// Removes entries whose timer has reached zero (object has re-settled to static state).
+    /// </summary>
+    private void TickDislodgedObjects()
+    {
+        if (this.dislodgedObjectSettleTicks.Count == 0) return;
+        var expired = new List<int>();
+        foreach (var kv in this.dislodgedObjectSettleTicks)
+        {
+            if (kv.Value <= 1)
+                expired.Add(kv.Key);
+            else
+                this.dislodgedObjectSettleTicks[kv.Key] = kv.Value - 1;
+        }
+        foreach (var k in expired)
+            this.dislodgedObjectSettleTicks.Remove(k);
+    }
+
+    private IEnumerable<Character> EnumerateHumanoids(GameLocation location)
     {
         if (Game1.player is not null)
         {
@@ -2811,6 +2921,8 @@ public sealed class ModEntry : Mod
         }
 
         // Sinusoidal oscillation (tail thrash, worm wriggle, elemental shimmer)
+        // Both axes use Math.Sin so they remain IN PHASE — this produces a linear back-and-forth
+        // oscillation rather than the Lissajous/circular motion that a Sin+Cos pairing creates.
         if (speciesProfile.SinusoidalXAmp > 0f)
         {
             impulse.X += (float)Math.Sin(Game1.ticks * speciesProfile.SinusoidalXFreq)
@@ -2819,7 +2931,7 @@ public sealed class ModEntry : Mod
 
         if (speciesProfile.SinusoidalYAmp > 0f)
         {
-            impulse.Y += (float)Math.Cos(Game1.ticks * speciesProfile.SinusoidalYFreq)
+            impulse.Y += (float)Math.Sin(Game1.ticks * speciesProfile.SinusoidalYFreq)
                        * speciesProfile.SinusoidalYAmp * effectiveStrength;
         }
 
