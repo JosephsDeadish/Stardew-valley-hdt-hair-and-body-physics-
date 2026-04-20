@@ -17,15 +17,29 @@ namespace StardewHdtPhysics;
 //  • Hair / wings / tail get small follow-through impulse even when body is hit,
 //    because a connected character feels like one unit.
 //
+// Breast anchor rule (enforced here):
+//  • Breast bones (BreastL/R, BreastUpperL/R, BreastLowerL/R) are NEVER driven
+//    by HitZone.ArmL, HitZone.ArmR, or general torso-limb zones.
+//  • Only HitZone.BreastL and HitZone.BreastR route directly into breast bones.
+//  • This keeps breast physics anchored to the upper-chest, independent of arm
+//    or torso limb logic (see BodyZoneAnchorOffsets.GetBreastChestAnchor).
+//
+// Limb secondary-offset rule (enforced here):
+//  • ThighL/R, ButtL/R, and Groin are secondary-offset bones — they receive
+//    reduced force fractions even on direct hits (0.25–0.35× butt, 0.10–0.20×
+//    thigh) because the animation system drives the primary limb position.
+//    Physics only contributes soft-tissue jiggle and recoil on top of that.
+//
 // Zone → bone mapping overview (matches BoneIndex):
-//   Torso/Belly → BellyCenter (primary), ThighL/R (small)
-//   BreastL      → BreastL/UpperL/LowerL + small belly
-//   BreastR      → BreastR/UpperR/LowerR + small belly
-//   ButtL/R      → ButtL/R + small thigh
-//   ThighL/R     → ThighL/R + small belly + small butt
-//   HipL/R       → ThighL/R + ButtL/R (both sides, weighted)
-//   Groin        → BellyCenter + ButtL + ButtR
-//   Head/Torso → hair chain + small belly
+//   Torso/Belly → BellyCenter (primary), ThighL/R (small secondary)
+//   BreastL      → BreastL/UpperL/LowerL (chest-anchored chain) + small belly
+//   BreastR      → BreastR/UpperR/LowerR (chest-anchored chain) + small belly
+//   ArmL/ArmR   → BellyCenter + ThighL/R small (NO breast bones)
+//   ButtL/R      → ButtL/R + small thigh (secondary offsets)
+//   ThighL/R     → ThighL/R + small belly + small butt (secondary offsets)
+//   HipL/R       → ThighL/R + ButtL/R (both sides, weighted secondary)
+//   Groin        → BellyCenter + ButtL + ButtR (secondary)
+//   Head/Torso  → hair chain + small belly
 //   Tail         → tail chain
 //   WingL/R      → wing pair
 //   Armor/Shield → body bones at 20 % (armour absorbs most)

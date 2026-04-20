@@ -140,6 +140,20 @@ public static class BoneIndex
 
     /// <summary>Total number of body bones per character (7 base + 4 extra breast).</summary>
     public const int BoneCount = 11;
+
+    /// <summary>
+    /// Returns <c>true</c> if <paramref name="boneIndex"/> is a <b>limb secondary-offset bone</b>.
+    ///
+    /// <b>Limb design rule:</b> limb bones (ThighL/R, ButtL/R, Groin) add a <em>secondary
+    /// physics offset</em> on top of the character's animation pose — they do NOT replace or
+    /// drive the animated limb position.  The animation system owns the limb position; the
+    /// physics bone only contributes a subtle soft-tissue jiggle, step-recoil, or weight-shift.
+    ///
+    /// Contrast with breast bones, whose displacements are primary visual contributions that
+    /// are directly blended into the final character offset.
+    /// </summary>
+    public static bool IsLimbSecondaryOffsetBone(int boneIndex)
+        => boneIndex is ThighL or ThighR or ButtL or ButtR or Groin;  // Groin = BreastL alias for masculine
 }
 
 // ── Body anchor table ─────────────────────────────────────────────────────────
@@ -272,6 +286,157 @@ public static class BodyAnchorTable
         };
 }
 
+// ── Fake-bone per-facing anchor offsets ──────────────────────────────────────
+
+/// <summary>
+/// Per-facing pixel anchor positions for every <see cref="BoneIndex"/> slot,
+/// relative to the character's sprite draw origin (the sprite's centre-bottom
+/// or top-left depending on convention — here we use top-left as (0,0) with Y
+/// increasing downward, matching Stardew Valley's tile/draw space).
+///
+/// <b>Design rationale — fake-bone approach for sprite-based 2D characters:</b>
+///
+/// Stardew Valley characters are single sprites; there is no real skeleton.
+/// We implement a fake-bone approach by hand-authoring anchor offsets for each
+/// body zone and each facing direction.  Each physics bone then stores a LOCAL
+/// displacement from that anchor:
+/// <code>
+///   bone_world_position = character_origin + AnchorOffset(bone, facing) + bone.Displacement
+/// </code>
+/// This is what keeps each bone "attached" to the correct region of the body
+/// regardless of how physics forces move it.
+///
+/// <b>Breast anchor rule (enforced by design):</b>
+/// BreastL/R and their Upper/Lower sub-bones always anchor to the upper-chest
+/// region.  They are NEVER connected to the arm-limb anchor or the belly/torso
+/// anchor.  Use <see cref="GetBreastChestAnchor"/> to retrieve the correct chest
+/// anchor for either side.
+///
+/// <b>Limb anchor rule:</b>
+/// ThighL/R and ButtL/R anchor to the lower-body / hip region.  Their physics
+/// displacement is a SECONDARY OFFSET added on top of the animation pose — they
+/// do not replace the animated limb position.  See <see cref="BoneIndex.IsLimbSecondaryOffsetBone"/>.
+///
+/// <b>Facing convention (matches Stardew Valley <c>FacingDirection</c>):</b>
+/// <list type="bullet">
+///   <item>0 = Up   — back of character visible; butt dominant</item>
+///   <item>1 = Right — right-side profile; BreastR/ButtR near-side</item>
+///   <item>2 = Down  — front visible; breasts dominant (default)</item>
+///   <item>3 = Left  — left-side profile; BreastL/ButtL near-side</item>
+/// </list>
+///
+/// <b>Example values (Facing Right / facing=1):</b>
+/// <code>
+///   BreastL anchor = (x+2, y-10)   ← far side, partially occluded
+///   BreastR anchor = (x+6, y-10)   ← near side, prominent
+///   ButtL   anchor = (x+1, y+8)    ← far side
+///   ButtR   anchor = (x+4, y+8)    ← near side
+///   ThighL  anchor = (x+1, y+14)   ← far side
+///   ThighR  anchor = (x+4, y+14)   ← near side
+/// </code>
+/// </summary>
+public static class BodyZoneAnchorOffsets
+{
+    // [facing, boneIndex] = pixel offset (x, y) from character sprite draw origin.
+    // X: negative = left of sprite centre; positive = right.
+    // Y: negative = above sprite centre (up); positive = below (down).
+    private static readonly Vector2[,] Offsets = new Vector2[4, BoneIndex.BoneCount]
+    {
+        // ── Facing 0 (Up / back of character) ─────────────────────────────────
+        // Butt visible and dominant.  Breasts are hidden behind the body — small offsets.
+        {
+            /* BellyCenter  */ new Vector2( 0f,   2f),
+            /* ThighL       */ new Vector2(-4f,  14f),
+            /* ThighR       */ new Vector2( 4f,  14f),
+            /* BreastL      */ new Vector2(-3f, -10f),
+            /* BreastR      */ new Vector2( 3f, -10f),
+            /* ButtL        */ new Vector2(-5f,   6f),
+            /* ButtR        */ new Vector2( 5f,   6f),
+            /* BreastUpperL */ new Vector2(-3f, -13f),
+            /* BreastUpperR */ new Vector2( 3f, -13f),
+            /* BreastLowerL */ new Vector2(-3f,  -8f),
+            /* BreastLowerR */ new Vector2( 3f,  -8f),
+        },
+        // ── Facing 1 (Right / right side visible) ─────────────────────────────
+        // BreastR and ButtR are near-side — positioned further right (larger +x).
+        // BreastL and ButtL are far-side — partially occluded, closer to centre.
+        {
+            /* BellyCenter  */ new Vector2( 3f,   2f),
+            /* ThighL       */ new Vector2( 1f,  14f),
+            /* ThighR       */ new Vector2( 4f,  14f),
+            /* BreastL      */ new Vector2( 2f, -10f),
+            /* BreastR      */ new Vector2( 6f, -10f),
+            /* ButtL        */ new Vector2( 1f,   8f),
+            /* ButtR        */ new Vector2( 4f,   8f),
+            /* BreastUpperL */ new Vector2( 2f, -13f),
+            /* BreastUpperR */ new Vector2( 6f, -13f),
+            /* BreastLowerL */ new Vector2( 2f,  -8f),
+            /* BreastLowerR */ new Vector2( 6f,  -8f),
+        },
+        // ── Facing 2 (Down / front of character) ──────────────────────────────
+        // Symmetric front view.  Breasts fully visible and laterally spread.
+        // Butt suppressed (behind the body).
+        {
+            /* BellyCenter  */ new Vector2( 0f,   2f),
+            /* ThighL       */ new Vector2(-4f,  14f),
+            /* ThighR       */ new Vector2( 4f,  14f),
+            /* BreastL      */ new Vector2(-6f, -10f),
+            /* BreastR      */ new Vector2( 6f, -10f),
+            /* ButtL        */ new Vector2(-4f,   8f),
+            /* ButtR        */ new Vector2( 4f,   8f),
+            /* BreastUpperL */ new Vector2(-6f, -13f),
+            /* BreastUpperR */ new Vector2( 6f, -13f),
+            /* BreastLowerL */ new Vector2(-6f,  -8f),
+            /* BreastLowerR */ new Vector2( 6f,  -8f),
+        },
+        // ── Facing 3 (Left / left side visible) ───────────────────────────────
+        // Mirror of Facing 1: BreastL and ButtL are near-side (negative x dominant).
+        {
+            /* BellyCenter  */ new Vector2(-3f,   2f),
+            /* ThighL       */ new Vector2(-4f,  14f),
+            /* ThighR       */ new Vector2(-1f,  14f),
+            /* BreastL      */ new Vector2(-6f, -10f),
+            /* BreastR      */ new Vector2(-2f, -10f),
+            /* ButtL        */ new Vector2(-4f,   8f),
+            /* ButtR        */ new Vector2(-1f,   8f),
+            /* BreastUpperL */ new Vector2(-6f, -13f),
+            /* BreastUpperR */ new Vector2(-2f, -13f),
+            /* BreastLowerL */ new Vector2(-6f,  -8f),
+            /* BreastLowerR */ new Vector2(-2f,  -8f),
+        },
+    };
+
+    /// <summary>
+    /// Returns the pixel anchor offset for <paramref name="boneIndex"/> when the
+    /// character is <paramref name="facing"/> (0=Up, 1=Right, 2=Down, 3=Left).
+    /// Out-of-range inputs return <see cref="Vector2.Zero"/>.
+    /// </summary>
+    public static Vector2 Get(int boneIndex, int facing)
+    {
+        if ((uint)facing >= 4 || (uint)boneIndex >= BoneIndex.BoneCount)
+            return Vector2.Zero;
+        return Offsets[facing, boneIndex];
+    }
+
+    /// <summary>
+    /// Returns the upper-chest anchor offset for the breast chain on the
+    /// specified side.  This is the stiffest bone in the chain
+    /// (<see cref="BoneIndex.BreastUpperL"/> / <see cref="BoneIndex.BreastUpperR"/>)
+    /// and acts as the fixed chest anchor that <see cref="BoneIndex.BreastL"/>/<c>R</c>
+    /// and <see cref="BoneIndex.BreastLowerL"/>/<c>R</c> chain toward.
+    ///
+    /// <b>Breast anchor rule:</b> breast bones always use this upper-chest anchor.
+    /// They are never attached to the arm-limb anchor or the belly/torso anchor.
+    /// </summary>
+    /// <param name="facing">0=Up, 1=Right, 2=Down, 3=Left.</param>
+    /// <param name="side">-1 = left side (BreastUpperL), +1 = right side (BreastUpperR).</param>
+    public static Vector2 GetBreastChestAnchor(int facing, int side)
+    {
+        var idx = side < 0 ? BoneIndex.BreastUpperL : BoneIndex.BreastUpperR;
+        return Get(idx, facing);
+    }
+}
+
 /// <summary>
 /// Holds all <see cref="BoneState"/> values for one character.
 /// Created lazily on first use per character key.
@@ -372,7 +537,14 @@ public sealed class BoneGroup
                 new Vector2( breastForce.X * (latR * 0.58f), breastForce.Y * 1.80f) * bStr + chainPullVecCenterR * BreastChainPull,
                 stiffness * 0.68f, damping * 0.76f);
 
-            // Butt: strong Y, gentle mirrored X  (pants-covered)
+            // ── Secondary-offset limb bones (feminine) ────────────────────────
+            // IMPORTANT: Butt/Thigh/Belly are secondary-offset bones.
+            // They add soft-tissue jiggle / step-recoil ON TOP of the animation pose.
+            // They do NOT replace or drive the animated limb position — the animation
+            // system owns the limb position; these bones only contribute a subtle offset.
+            // See BoneIndex.IsLimbSecondaryOffsetBone() for the canonical list.
+
+            // Butt: strong Y, gentle mirrored X  (pants-covered; anchored at hip/rear)
             Bones[BoneIndex.ButtL].Step(
                 new Vector2(-centerForce.X * 0.32f, centerForce.Y * 1.35f) * buStr,
                 stiffness, damping);
@@ -380,12 +552,13 @@ public sealed class BoneGroup
                 new Vector2( centerForce.X * 0.32f, centerForce.Y * 1.35f) * buStr,
                 stiffness, damping);
 
-            // Belly: moderate Y, tiny X  (shirt-covered)
+            // Belly: moderate Y, tiny X  (shirt-covered; secondary offset, not primary)
             Bones[BoneIndex.BellyCenter].Step(
                 new Vector2(centerForce.X * 0.20f, centerForce.Y * 0.90f) * beStr,
                 stiffness * 1.10f, damping * 1.10f);
 
-            // Thighs: step-rhythm Y + mirrored X  (pants-covered)
+            // Thighs: step-rhythm Y + mirrored X  (pants-covered; animation drives main
+            // thigh position — physics adds flesh-jiggle + hit-recoil secondary offset)
             Bones[BoneIndex.ThighL].Step(
                 new Vector2(-centerForce.X * 0.42f, centerForce.Y * 0.82f) * thStr,
                 stiffness * 1.05f, damping);
@@ -401,12 +574,13 @@ public sealed class BoneGroup
             var beStr = cfg.MaleBellyStrength  * breastMult;
             var thStr = cfg.MaleThighStrength  * lowerBodyMult;
 
-            // Groin: X-dominant slinky (side-to-side oscillation)
+            // Groin: X-dominant slinky (side-to-side oscillation; secondary offset —
+            // animation drives the main lower-body position)
             Bones[BoneIndex.Groin].Step(
                 new Vector2(centerForce.X * 1.20f, centerForce.Y * 0.35f) * grStr,
                 stiffness * 0.85f, damping * 0.90f);
 
-            // Butt: strong Y
+            // Butt: strong Y (secondary offset anchored at pelvis/hip rear)
             Bones[BoneIndex.MButtL].Step(
                 new Vector2(-centerForce.X * 0.35f, centerForce.Y * 1.20f) * buStr,
                 stiffness, damping);
@@ -414,12 +588,12 @@ public sealed class BoneGroup
                 new Vector2( centerForce.X * 0.35f, centerForce.Y * 1.20f) * buStr,
                 stiffness, damping);
 
-            // Belly
+            // Belly (secondary offset)
             Bones[BoneIndex.BellyCenter].Step(
                 new Vector2(centerForce.X * 0.20f, centerForce.Y * 0.80f) * beStr,
                 stiffness * 1.10f, damping * 1.10f);
 
-            // Thighs
+            // Thighs: secondary flesh-jiggle offset — animation drives main leg position
             Bones[BoneIndex.ThighL].Step(
                 new Vector2(-centerForce.X * 0.40f, centerForce.Y * 0.80f) * thStr,
                 stiffness * 1.05f, damping);
