@@ -635,7 +635,7 @@ public sealed class ModEntry : Mod
         if (this.dragonRagdollCooldown.Count > 0)
         {
             var toRemove = new List<int>();
-            foreach (var kv in this.dragonRagdollCooldown)
+            foreach (var kv in this.dragonRagdollCooldown.ToArray())
             {
                 if (kv.Value <= 1)
                 {
@@ -884,7 +884,7 @@ public sealed class ModEntry : Mod
         if (this.loosenResetCountdown.Count > 0)
         {
             var toResecure = new List<(int Key, EquipSlot Slot)>();
-            foreach (var kv in this.loosenResetCountdown)
+            foreach (var kv in this.loosenResetCountdown.ToArray())
             {
                 if (kv.Value <= 1)
                     toResecure.Add(kv.Key);
@@ -1175,7 +1175,7 @@ public sealed class ModEntry : Mod
         if (!this.config.EnableTypedPhysicsDebris) return;
 
         var expired = new List<int>();
-        foreach (var kv in this.corpseAgeTicks)
+        foreach (var kv in this.corpseAgeTicks.ToArray())
         {
             int newAge = kv.Value + 1;
             int threshold = this.config.CorpseDebrisAgeTicks;
@@ -1185,7 +1185,7 @@ public sealed class ModEntry : Mod
                 // Spawn a tiny bone/sawdust burst at the last known position.
                 if (this.corpseLastPos.TryGetValue(kv.Key, out var pos))
                 {
-                    int count = 2 + Random.Shared.Next(3); // 2–4 particles
+                    int count = 2 + Game1.random.Next(3); // 2–4 particles
                     this.SpawnTypedDebris(pos, PhysicsParticleKind.Sawdust, count, 0.6f);
                 }
                 expired.Add(kv.Key);
@@ -2565,7 +2565,7 @@ public sealed class ModEntry : Mod
     {
         if (this.dislodgedObjectSettleTicks.Count == 0) return;
         var expired = new List<int>();
-        foreach (var kv in this.dislodgedObjectSettleTicks)
+        foreach (var kv in this.dislodgedObjectSettleTicks.ToArray())
         {
             if (kv.Value <= 1)
                 expired.Add(kv.Key);
@@ -7364,8 +7364,8 @@ public sealed class ModEntry : Mod
                 // Spawn the item as a physics world object at the character's position
                 var launchVel = ownerVelocity * profile.LaunchImpulseMult
                     + new Vector2(
-                        (Random.Shared.NextSingle() - 0.5f) * 0.8f,
-                        -Random.Shared.NextSingle() * 0.6f);
+                        (Game1.random.NextSingle() - 0.5f) * 0.8f,
+                        -Game1.random.NextSingle() * 0.6f);
 
                 var dropped = new DroppedBelonging
                 {
