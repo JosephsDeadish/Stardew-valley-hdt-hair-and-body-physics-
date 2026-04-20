@@ -1,4 +1,5 @@
 using Microsoft.Xna.Framework;
+using StardewValley;
 
 namespace StardewHdtPhysics;
 
@@ -310,7 +311,7 @@ public sealed class ItemPhysicsWorld
         {
             Position         = position,
             Velocity         = velocity,
-            RotationVelocity = (Random.Shared.NextSingle() - 0.5f) * 0.20f,
+            RotationVelocity = (Game1.random.NextSingle() - 0.5f) * 0.20f,
             Material         = material,
             Shape            = shape,
             ShapeRadius      = shapeRadius,
@@ -406,7 +407,7 @@ public sealed class ItemPhysicsWorld
                                 scatterMag = (rawMag - wakeThresh) * (1f - ageResist * 0.5f);
                                 item.Velocity.X       += dx * scatterMag;
                                 item.Velocity.Y       += dy * scatterMag;
-                                item.RotationVelocity += (Random.Shared.NextSingle() - 0.5f) * scatterMag * 0.2f;
+                                item.RotationVelocity += (Game1.random.NextSingle() - 0.5f) * scatterMag * 0.2f;
                             }
                         }
                     }

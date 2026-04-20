@@ -623,13 +623,60 @@ public sealed class BoneGroup
     /// <summary>
     /// Apply an instant impulse to all bones (hit, explosion, ragdoll, etc.).
     /// Each bone gets an anatomically scaled version of the impulse.
+    ///
+    /// IMPORTANT: this method only modifies <see cref="BoneState.Velocity"/> — it does
+    /// NOT advance <see cref="BoneState.Position"/>.  Calling <see cref="Step"/> with
+    /// zero spring parameters was incorrect because it also ran the Euler position-advance,
+    /// causing bones to double-step in the same tick (once from SimulateBody's StepBoneGroup
+    /// call and once from this call).  The fix distributes velocity kicks directly via
+    /// <see cref="BoneState.ApplyImpulse"/> using the same anatomical axis scaling as Step.
     /// </summary>
     public void ApplyImpulse(BodyProfileType profile, Vector2 impulse, ModConfig cfg)
     {
-        // Reuse the Step path with zero stiffness/damping (pure velocity kick)
-        // but we need to distribute it properly across bones.
-        // Treat the impulse as an external force this tick.
-        this.Step(profile, impulse, 0f, 0f, cfg);
+        if (profile == BodyProfileType.Feminine)
+        {
+            var bStr  = cfg.FemaleBreastStrength;
+            var buStr = cfg.FemaleButtStrength;
+            var beStr = cfg.FemaleBellyStrength;
+            var thStr = cfg.FemaleThighStrength;
+
+            // Per-facing lateral scale isn't available here (no facing param) so use
+            // symmetric front-view defaults (latL=latR=0.60) — good enough for impulses.
+            const float Lat = 0.60f;
+
+            Bones[BoneIndex.BreastUpperL].ApplyImpulse(new Vector2(-impulse.X * (Lat * 1.25f), impulse.Y * 0.50f) * bStr);
+            Bones[BoneIndex.BreastUpperR].ApplyImpulse(new Vector2( impulse.X * (Lat * 1.25f), impulse.Y * 0.50f) * bStr);
+            Bones[BoneIndex.BreastL].ApplyImpulse(new Vector2(-impulse.X * Lat, impulse.Y) * bStr);
+            Bones[BoneIndex.BreastR].ApplyImpulse(new Vector2( impulse.X * Lat, impulse.Y) * bStr);
+            Bones[BoneIndex.BreastLowerL].ApplyImpulse(new Vector2(-impulse.X * (Lat * 0.58f), impulse.Y * 1.80f) * bStr);
+            Bones[BoneIndex.BreastLowerR].ApplyImpulse(new Vector2( impulse.X * (Lat * 0.58f), impulse.Y * 1.80f) * bStr);
+
+            Bones[BoneIndex.ButtL].ApplyImpulse(new Vector2(-impulse.X * 0.32f, impulse.Y * 1.35f) * buStr);
+            Bones[BoneIndex.ButtR].ApplyImpulse(new Vector2( impulse.X * 0.32f, impulse.Y * 1.35f) * buStr);
+            Bones[BoneIndex.BellyCenter].ApplyImpulse(new Vector2(impulse.X * 0.20f, impulse.Y * 0.90f) * beStr);
+            Bones[BoneIndex.ThighL].ApplyImpulse(new Vector2(-impulse.X * 0.42f, impulse.Y * 0.82f) * thStr);
+            Bones[BoneIndex.ThighR].ApplyImpulse(new Vector2( impulse.X * 0.42f, impulse.Y * 0.82f) * thStr);
+        }
+        else if (profile == BodyProfileType.Masculine)
+        {
+            var grStr = cfg.MaleGroinStrength;
+            var buStr = cfg.MaleButtStrength;
+            var beStr = cfg.MaleBellyStrength;
+            var thStr = cfg.MaleThighStrength;
+
+            Bones[BoneIndex.Groin].ApplyImpulse(new Vector2(impulse.X * 1.20f, impulse.Y * 0.35f) * grStr);
+            Bones[BoneIndex.MButtL].ApplyImpulse(new Vector2(-impulse.X * 0.35f, impulse.Y * 1.20f) * buStr);
+            Bones[BoneIndex.MButtR].ApplyImpulse(new Vector2( impulse.X * 0.35f, impulse.Y * 1.20f) * buStr);
+            Bones[BoneIndex.BellyCenter].ApplyImpulse(new Vector2(impulse.X * 0.20f, impulse.Y * 0.80f) * beStr);
+            Bones[BoneIndex.ThighL].ApplyImpulse(new Vector2(-impulse.X * 0.40f, impulse.Y * 0.80f) * thStr);
+            Bones[BoneIndex.ThighR].ApplyImpulse(new Vector2( impulse.X * 0.40f, impulse.Y * 0.80f) * thStr);
+        }
+        else // Androgynous
+        {
+            var gentleForce = impulse * 0.35f * 0.65f;
+            for (int i = 0; i < BoneIndex.BoneCount; i++)
+                Bones[i].ApplyImpulse(gentleForce);
+        }
     }
 
     /// <summary>
@@ -682,13 +729,18 @@ public sealed class BoneGroup
         }
         else if (profile == BodyProfileType.Masculine)
         {
-            var wButtL = BodyAnchorTable.Get(BoneIndex.MButtL,     facing);
-            var wButtR = BodyAnchorTable.Get(BoneIndex.MButtR,     facing);
-            var wBelly = BodyAnchorTable.Get(BoneIndex.BellyCenter, facing);
-            var wThL   = BodyAnchorTable.Get(BoneIndex.ThighL,     facing);
-            var wThR   = BodyAnchorTable.Get(BoneIndex.ThighR,     facing);
+            // Groin shares the BoneIndex.BreastL slot (= 3), whose BodyAnchorTable weights
+            // already encode "front of character = high visibility, back = low".  Apply that
+            // weight so Groin jiggle is suppressed when facing away from the camera, matching
+            // the same rule applied to every other bone in this path.
+            var wGroin = BodyAnchorTable.Get(BoneIndex.Groin,       facing);
+            var wButtL = BodyAnchorTable.Get(BoneIndex.MButtL,      facing);
+            var wButtR = BodyAnchorTable.Get(BoneIndex.MButtR,      facing);
+            var wBelly = BodyAnchorTable.Get(BoneIndex.BellyCenter,  facing);
+            var wThL   = BodyAnchorTable.Get(BoneIndex.ThighL,      facing);
+            var wThR   = BodyAnchorTable.Get(BoneIndex.ThighR,      facing);
 
-            var groin = Bones[BoneIndex.Groin].Position;
+            var groin = Bones[BoneIndex.Groin].Position * wGroin;
             var butt  = (Bones[BoneIndex.MButtL].Position * wButtL + Bones[BoneIndex.MButtR].Position * wButtR) * 0.5f;
             var belly = Bones[BoneIndex.BellyCenter].Position * wBelly;
             var thigh = (Bones[BoneIndex.ThighL].Position * wThL   + Bones[BoneIndex.ThighR].Position * wThR) * 0.5f;
