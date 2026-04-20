@@ -2760,7 +2760,7 @@ public sealed class ModEntry : Mod
                 // Male groin physics: discrete step-based impulses driven by movement velocity.
                 // Previously used Math.Sin(ticks) which caused continuous circular oscillation
                 // even when the character was standing still.  Now only fires on real movement.
-                var speed = velocity.Length();
+                // Note: 'speed' is already defined in the enclosing scope (line above if/else chain).
                 switch (facing)
                 {
                     case 0: // North: lateral sway from left-right foot alternation
@@ -5674,7 +5674,7 @@ public sealed class ModEntry : Mod
                         worldPos,
                         new Vector2(MathF.Cos(chAngle) * chSpd, MathF.Sin(chAngle) * chSpd - 2.0f),
                         ItemPhysicsMaterial.Ore,
-                        ItemPhysicsShape.Sphere,
+                        ItemPhysicsShape.Circle,
                         shapeRadius: 5f,
                         visualSize:  4.0f + Game1.random.NextSingle() * 2.5f,
                         maxAgeTicks: 1000);
@@ -5693,7 +5693,7 @@ public sealed class ModEntry : Mod
                         worldPos,
                         new Vector2(MathF.Cos(chAngle) * chSpd, MathF.Sin(chAngle) * chSpd - 1.5f),
                         ItemPhysicsMaterial.Stone,
-                        ItemPhysicsShape.Sphere,
+                        ItemPhysicsShape.Circle,
                         shapeRadius: 5f,
                         visualSize:  3.5f + Game1.random.NextSingle() * 2f,
                         maxAgeTicks: 900);
