@@ -343,7 +343,7 @@ public sealed class ModEntry : Mod
             Vector2 boneOffset = Vector2.Zero;
             if (this.boneGroups.TryGetValue(key, out var group) && !group.IsAllNearRest())
             {
-                boneOffset = group.ComputeVisualDisplacement(profile);
+                boneOffset = group.ComputeVisualDisplacement(profile, character.FacingDirection);
             }
 
             // ── Hair chain tip drives additional body-sway contribution ─────
@@ -2808,7 +2808,7 @@ public sealed class ModEntry : Mod
             impulse *= 0.82f;
             this.bodyImpulse[key] = impulse;
             // Also drive spring bones (water still moves body parts around)
-            this.StepBoneGroup(key, profile, impulse * 0.5f, breastMult, lowerBodyMult);
+            this.StepBoneGroup(key, profile, impulse * 0.5f, breastMult, lowerBodyMult, character.FacingDirection);
             return;
         }
 
@@ -2828,7 +2828,7 @@ public sealed class ModEntry : Mod
         // Pass per-region mults so each bone is only dampened by clothing that covers it.
         // Hat and boots have zero effect on breast/belly (breastMult unaffected by them).
         // Shirt has zero effect on butt/thigh/groin (lowerBodyMult unaffected by it).
-        this.StepBoneGroup(key, profile, impulse, breastMult, lowerBodyMult);
+        this.StepBoneGroup(key, profile, impulse, breastMult, lowerBodyMult, character.FacingDirection);
     }
 
     /// <summary>
@@ -2841,7 +2841,7 @@ public sealed class ModEntry : Mod
     ///   lowerBodyMult — from pants+boots only (hat/shirt have no effect on butt/thigh/groin)
     /// </summary>
     private void StepBoneGroup(int key, BodyProfileType profile, Vector2 externalForce,
-        float breastMult = 1f, float lowerBodyMult = 1f)
+        float breastMult = 1f, float lowerBodyMult = 1f, int facing = 2)
     {
         if (!this.boneGroups.TryGetValue(key, out var group))
         {
@@ -2851,7 +2851,7 @@ public sealed class ModEntry : Mod
 
         group.Step(profile, externalForce,
             this.config.BoneStiffness, this.config.BoneDamping,
-            this.config, breastMult, lowerBodyMult);
+            this.config, breastMult, lowerBodyMult, facing);
     }
 
 

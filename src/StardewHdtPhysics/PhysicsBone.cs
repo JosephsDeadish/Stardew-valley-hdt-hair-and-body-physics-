@@ -43,8 +43,10 @@ public struct BoneState
     // Velocity cap: 2.5 units/tick ≈ 25 px at scale-10 — prevents runaway oscillation
     // when stiffness is high or many chain segments accumulate energy.
     // Displacement cap: 4.0 units ≈ 40 px — stops positional explosion on long chains.
-    private const float MaxVelSq  = 2.5f * 2.5f;
+    private const float MaxVelSq   = 2.5f * 2.5f;
     private const float MaxDisplSq = 4.0f * 4.0f;
+    // Below this threshold (both pos and vel) the bone snaps to rest to stop micro-jitter.
+    private const float SnapThresholdSq = 0.0015f * 0.0015f;
 
     public void Step(Vector2 externalForce, float stiffness, float damping)
     {
@@ -63,6 +65,17 @@ public struct BoneState
         var posSq = Position.LengthSquared();
         if (posSq > MaxDisplSq)
             Position *= 4.0f / MathF.Sqrt(posSq);
+
+        // ── Snap to rest — prevent perpetual micro-jitter ─────────────────────
+        // When both displacement and velocity are negligibly small, zero them out
+        // exactly.  This prevents floating-point residuals accumulating over time
+        // and avoids the "infinite low-frequency buzz" problem described in the
+        // physics design guide.
+        if (Position.LengthSquared() < SnapThresholdSq && Velocity.LengthSquared() < SnapThresholdSq)
+        {
+            Position = Vector2.Zero;
+            Velocity = Vector2.Zero;
+        }
     }
 
     /// <summary>
@@ -129,6 +142,133 @@ public static class BoneIndex
     public const int BoneCount = 11;
 }
 
+// ── Body anchor table ─────────────────────────────────────────────────────────
+
+/// <summary>
+/// Per-facing-direction visibility weights for each <see cref="BoneIndex"/> slot.
+///
+/// These weights encode how much each physics bone's displacement should
+/// contribute to the final blended visual offset, depending on which side of
+/// the character is facing the camera.  A weight of 0 means "not visible from
+/// this angle — suppress"; 1 means "fully visible — apply at full strength."
+///
+/// Design rationale (sprite-based fake-bone approach):
+///   • In a 2D sprite game the whole character sprite moves as one unit.
+///   • We can't independently offset a breast region vs a butt region.
+///   • Instead, <see cref="BoneGroup.ComputeVisualDisplacement"/> blends all bone
+///     positions into one representative offset, weighted by visibility.
+///   • The resulting offset is what gets applied to <c>character.Position</c>.
+///   • This correctly suppresses, e.g., breast bounce when we're looking at the
+///     character's back, and suppresses butt when looking at the front.
+///
+/// Facing convention (matches Stardew Valley's <c>FacingDirection</c>):
+///   0 = Up   (back of character visible)
+///   1 = Right (character profile, right side)
+///   2 = Down  (front of character visible)  ← default
+///   3 = Left  (character profile, left side)
+/// </summary>
+public static class BodyAnchorTable
+{
+    // [facing, boneIndex] = visibility weight [0..1]
+    // Organized as: facing-row, bone-column for cache friendliness.
+    private static readonly float[,] Weights = new float[4, BoneIndex.BoneCount]
+    {
+        // ── Facing 0 (Up / back of character) ─────────────────────────────────
+        // Butt dominant, thighs visible, belly/breasts suppressed (hidden behind body).
+        {
+            /* BellyCenter    */ 0.05f,
+            /* ThighL         */ 0.50f,
+            /* ThighR         */ 0.50f,
+            /* BreastL        */ 0.10f,
+            /* BreastR        */ 0.10f,
+            /* ButtL          */ 0.90f,
+            /* ButtR          */ 0.90f,
+            /* BreastUpperL   */ 0.07f,
+            /* BreastUpperR   */ 0.07f,
+            /* BreastLowerL   */ 0.08f,
+            /* BreastLowerR   */ 0.08f,
+        },
+        // ── Facing 1 (Right / profile, right side visible) ────────────────────
+        // BreastR and ButtR are near-side and most prominent.
+        {
+            /* BellyCenter    */ 0.40f,
+            /* ThighL         */ 0.30f,
+            /* ThighR         */ 0.70f,
+            /* BreastL        */ 0.25f,
+            /* BreastR        */ 0.85f,
+            /* ButtL          */ 0.25f,
+            /* ButtR          */ 0.80f,
+            /* BreastUpperL   */ 0.15f,
+            /* BreastUpperR   */ 0.65f,
+            /* BreastLowerL   */ 0.20f,
+            /* BreastLowerR   */ 0.80f,
+        },
+        // ── Facing 2 (Down / front of character) ──────────────────────────────
+        // Breasts and belly fully visible.  Butt suppressed.
+        {
+            /* BellyCenter    */ 0.80f,
+            /* ThighL         */ 0.55f,
+            /* ThighR         */ 0.55f,
+            /* BreastL        */ 0.90f,
+            /* BreastR        */ 0.90f,
+            /* ButtL          */ 0.10f,
+            /* ButtR          */ 0.10f,
+            /* BreastUpperL   */ 0.70f,
+            /* BreastUpperR   */ 0.70f,
+            /* BreastLowerL   */ 0.95f,
+            /* BreastLowerR   */ 0.95f,
+        },
+        // ── Facing 3 (Left / profile, left side visible) ──────────────────────
+        // BreastL and ButtL are near-side (mirror of facing 1).
+        {
+            /* BellyCenter    */ 0.40f,
+            /* ThighL         */ 0.70f,
+            /* ThighR         */ 0.30f,
+            /* BreastL        */ 0.85f,
+            /* BreastR        */ 0.25f,
+            /* ButtL          */ 0.80f,
+            /* ButtR          */ 0.25f,
+            /* BreastUpperL   */ 0.65f,
+            /* BreastUpperR   */ 0.15f,
+            /* BreastLowerL   */ 0.80f,
+            /* BreastLowerR   */ 0.20f,
+        },
+    };
+
+    /// <summary>
+    /// Returns the visibility weight [0..1] for <paramref name="boneIndex"/> when the
+    /// character is <paramref name="facing"/> (0=Up, 1=Right, 2=Down, 3=Left).
+    /// Out-of-range inputs return 0.5 (neutral fallback).
+    /// </summary>
+    public static float Get(int boneIndex, int facing)
+    {
+        if ((uint)facing >= 4 || (uint)boneIndex >= BoneIndex.BoneCount)
+            return 0.5f;
+        return Weights[facing, boneIndex];
+    }
+
+    /// <summary>
+    /// Per-facing lateral scale for the left or right breast bone.
+    /// Encodes how prominent the lateral (X-axis) jiggle component should be
+    /// for that breast given the current facing direction.
+    ///
+    /// When the near-side breast is facing the camera (e.g. BreastR when facing right),
+    /// it should contribute more lateral splay.  The far-side breast is partially hidden
+    /// and contributes less.
+    ///
+    /// Returns a Vector2(lateralLeftBreast, lateralRightBreast) scale pair.
+    /// </summary>
+    public static (float lateralL, float lateralR) BreastLateralScale(int facing)
+        => facing switch
+        {
+            0 => (0.20f, 0.20f),  // facing up — breasts hidden, minimal lateral
+            1 => (0.30f, 0.80f),  // facing right — BreastR near-side, dominant
+            2 => (0.60f, 0.60f),  // facing front — symmetric, standard
+            3 => (0.80f, 0.30f),  // facing left  — BreastL near-side, dominant
+            _ => (0.60f, 0.60f),
+        };
+}
+
 /// <summary>
 /// Holds all <see cref="BoneState"/> values for one character.
 /// Created lazily on first use per character key.
@@ -149,18 +289,26 @@ public sealed class BoneGroup
     /// Advance all bones one tick using a shared centre-of-mass external force.
     /// Each bone receives a scaled + axis-modified version of the force that
     /// reflects its anatomical role:
-    ///   BreastL/R        — equal Y (vertical bounce) + mirrored X (lateral jello splay)
-    ///   BreastUpperL/R   — stiffer, less Y, more lateral (apex stays more in place)
-    ///   BreastLowerL/R   — softest, most Y, gravity droop (underside jiggles most)
-    ///   ButtL/R    — strong Y + gentle mirrored X
-    ///   BellyCenter— Y-dominant gentle bounce  (shirt-covered → breastMult)
-    ///   ThighL/R   — Y-dominant with mirrored X step bounce  (pants-covered → lowerBodyMult)
-    ///   Groin (M)  — X-dominant slinky oscillation  (pants-covered → lowerBodyMult)
+    ///   BreastUpperL/R — stiffer, chest-anchored; stepped first so Center/Lower can chain to it
+    ///   BreastL/R      — centre-of-mass; Y 1.40×; springs toward BreastUpper (chain pull)
+    ///   BreastLowerL/R — softest, most Y 1.80×; springs toward BreastCenter (chain pull)
+    ///   ButtL/R        — strong Y + gentle mirrored X
+    ///   BellyCenter    — Y-dominant gentle bounce  (shirt-covered → breastMult)
+    ///   ThighL/R       — Y-dominant + mirrored X step bounce  (pants-covered → lowerBodyMult)
+    ///   Groin (M)      — X-dominant slinky oscillation  (pants-covered → lowerBodyMult)
     ///
-    /// <paramref name="breastMult"/>:    [0.5, 1.0] from shirt coverage. Hat/boots = 1.0 (no effect on breast).
-    /// <paramref name="lowerBodyMult"/>: [0.5, 1.0] from pants+boots coverage. Hat/shirt = 1.0 (no effect on lower body).
-    /// Both default to 1.0 when clothing physics modifier is off or no clothing is worn.
+    /// <paramref name="breastMult"/>:    [0.5, 1.0] from shirt coverage.
+    /// <paramref name="lowerBodyMult"/>: [0.5, 1.0] from pants+boots coverage.
+    /// <paramref name="facing"/>: 0=Up, 1=Right, 2=Down(default), 3=Left.
+    ///   Controls per-side lateral prominence of breast bones so the near-side
+    ///   breast is more expressive than the far-side breast in profile views.
+    ///   Also affects how chain constraints are weighted per bone.
     /// </summary>
+    // Pull fraction toward parent position each tick for the breast chain.
+    // At 0.18 a parent 0.5 units away exerts ~0.09 units/tick of corrective force
+    // — strong enough to keep the chain connected, gentle enough not to override the spring.
+    private const float BreastChainPull = 0.18f;
+
     public void Step(
         BodyProfileType profile,
         Vector2 centerForce,
@@ -168,45 +316,57 @@ public sealed class BoneGroup
         float damping,
         ModConfig cfg,
         float breastMult = 1f,
-        float lowerBodyMult = 1f)
+        float lowerBodyMult = 1f,
+        int facing = 2)
     {
         if (profile == BodyProfileType.Feminine)
         {
             // Per-bone config strength × per-region clothing multiplier.
-            // Breast and belly → breastMult (shirt slot).
-            // Butt, thigh        → lowerBodyMult (pants+boots slots).
             var bStr  = cfg.FemaleBreastStrength  * breastMult;
             var buStr = cfg.FemaleButtStrength     * lowerBodyMult;
-            var beStr = cfg.FemaleBellyStrength    * breastMult;   // belly is under shirt, not pants
+            var beStr = cfg.FemaleBellyStrength    * breastMult;
             var thStr = cfg.FemaleThighStrength    * lowerBodyMult;
 
-            // ── Centre-of-mass breast (primary) ───────────────────────────────
-            // Y amplified 1.40 for gravity-bias jiggle (HDT OCBC style: breasts bounce down/up)
+            // Y amplified 1.40 for gravity-bias jiggle (HDT OCBC style)
             var breastForce = new Vector2(centerForce.X, centerForce.Y * 1.40f);
-            Bones[BoneIndex.BreastL].Step(
-                new Vector2(-breastForce.X * 0.60f, breastForce.Y) * bStr,
-                stiffness * 0.88f, damping);
-            Bones[BoneIndex.BreastR].Step(
-                new Vector2( breastForce.X * 0.60f, breastForce.Y) * bStr,
-                stiffness * 0.88f, damping);
 
-            // ── Upper breast — cleavage apex (stiffer, less Y, more lateral) ──
-            // Stays more in place; lateral splay gives the "cleavage squeeze" look.
+            // Per-facing lateral prominence: near-side breast dominant, far-side reduced.
+            // This implements the "left breast stays attached to left chest anchor,
+            // right breast stays attached to right chest anchor" requirement.
+            var (latL, latR) = BodyAnchorTable.BreastLateralScale(facing);
+
+            // ── Step 1: BreastUpper — chest-anchored, stiffest ────────────────
+            // These are the "closest to the body" bones and define the anchor
+            // the Center and Lower bones will chain toward.
             Bones[BoneIndex.BreastUpperL].Step(
-                new Vector2(-breastForce.X * 0.75f, breastForce.Y * 0.50f) * bStr,
+                new Vector2(-breastForce.X * (latL * 1.25f), breastForce.Y * 0.50f) * bStr,
                 stiffness * 1.18f, damping * 1.12f);
             Bones[BoneIndex.BreastUpperR].Step(
-                new Vector2( breastForce.X * 0.75f, breastForce.Y * 0.50f) * bStr,
+                new Vector2( breastForce.X * (latR * 1.25f), breastForce.Y * 0.50f) * bStr,
                 stiffness * 1.18f, damping * 1.12f);
 
-            // ── Lower breast — underside (softest, most Y, gravity droop) ─────
-            // Y amplified 1.80 + softer spring → the bottom swings farthest and
-            // lags the upper half, creating the HDT top-stay/bottom-jiggle cascade.
+            // ── Step 2: BreastCenter — main mass, chains toward BreastUpper ───
+            // Chain pull: BreastCenter springs toward its parent (BreastUpper).
+            // This keeps it "attached" to the chest anchor through the upper bone.
+            var toUpperL = Bones[BoneIndex.BreastUpperL].Position - Bones[BoneIndex.BreastL].Position;
+            var toUpperR = Bones[BoneIndex.BreastUpperR].Position - Bones[BoneIndex.BreastR].Position;
+            Bones[BoneIndex.BreastL].Step(
+                new Vector2(-breastForce.X * latL, breastForce.Y) * bStr + toUpperL * BreastChainPull,
+                stiffness * 0.88f, damping);
+            Bones[BoneIndex.BreastR].Step(
+                new Vector2( breastForce.X * latR, breastForce.Y) * bStr + toUpperR * BreastChainPull,
+                stiffness * 0.88f, damping);
+
+            // ── Step 3: BreastLower — softest, chains toward BreastCenter ─────
+            // Y 1.80× + chain toward Center → creates the HDT top-stay/bottom-jiggle cascade:
+            //   Upper stays → Center lags → Lower swings the most.
+            var toCenterL = Bones[BoneIndex.BreastL].Position - Bones[BoneIndex.BreastLowerL].Position;
+            var toCenterR = Bones[BoneIndex.BreastR].Position - Bones[BoneIndex.BreastLowerR].Position;
             Bones[BoneIndex.BreastLowerL].Step(
-                new Vector2(-breastForce.X * 0.35f, breastForce.Y * 1.80f) * bStr,
+                new Vector2(-breastForce.X * (latL * 0.58f), breastForce.Y * 1.80f) * bStr + toCenterL * BreastChainPull,
                 stiffness * 0.68f, damping * 0.76f);
             Bones[BoneIndex.BreastLowerR].Step(
-                new Vector2( breastForce.X * 0.35f, breastForce.Y * 1.80f) * bStr,
+                new Vector2( breastForce.X * (latR * 0.58f), breastForce.Y * 1.80f) * bStr + toCenterR * BreastChainPull,
                 stiffness * 0.68f, damping * 0.76f);
 
             // Butt: strong Y, gentle mirrored X  (pants-covered)
@@ -299,45 +459,78 @@ public sealed class BoneGroup
     /// Compute the blended visual displacement for this group.
     /// Returns a Vector2 suitable for use as a screen-pixel offset after multiplying
     /// by PhysicsVisualScale.
+    ///
+    /// <paramref name="facing"/>: 0=Up, 1=Right, 2=Down(default), 3=Left.
+    /// Per-bone visibility weights from <see cref="BodyAnchorTable"/> suppress bones
+    /// that are not visible at the current facing direction (e.g. breasts when
+    /// facing away from camera, butt when facing toward camera).
     /// </summary>
-    public Vector2 ComputeVisualDisplacement(BodyProfileType profile)
+    public Vector2 ComputeVisualDisplacement(BodyProfileType profile, int facing = 2)
     {
         if (profile == BodyProfileType.Feminine)
         {
             // Multi-bone breast chain blend (HDT cascade):
-            //   Upper (10%) + Centre (35%) + Lower (25%) = 70% breast contribution
-            //   Lower jiggles the most and lags → produces top-stay/bottom-swing motion.
-            var breastUpper  = (Bones[BoneIndex.BreastUpperL].Position + Bones[BoneIndex.BreastUpperR].Position) * 0.5f;
-            var breastCentre = (Bones[BoneIndex.BreastL].Position      + Bones[BoneIndex.BreastR].Position)       * 0.5f;
-            var breastLower  = (Bones[BoneIndex.BreastLowerL].Position + Bones[BoneIndex.BreastLowerR].Position)  * 0.5f;
-            var breastBlend  = breastUpper * 0.10f + breastCentre * 0.35f + breastLower * 0.25f;  // = 0.70f total
+            //   Upper → Centre → Lower progressively lags.
+            // Each bone weighted by its facing-specific visibility so that, for
+            // example, breast bounce is suppressed when looking at the character's back.
+            var wBuL  = BodyAnchorTable.Get(BoneIndex.BreastUpperL, facing);
+            var wBuR  = BodyAnchorTable.Get(BoneIndex.BreastUpperR, facing);
+            var wBcL  = BodyAnchorTable.Get(BoneIndex.BreastL,      facing);
+            var wBcR  = BodyAnchorTable.Get(BoneIndex.BreastR,      facing);
+            var wBlL  = BodyAnchorTable.Get(BoneIndex.BreastLowerL, facing);
+            var wBlR  = BodyAnchorTable.Get(BoneIndex.BreastLowerR, facing);
+            var wButtL = BodyAnchorTable.Get(BoneIndex.ButtL,       facing);
+            var wButtR = BodyAnchorTable.Get(BoneIndex.ButtR,       facing);
+            var wBelly = BodyAnchorTable.Get(BoneIndex.BellyCenter, facing);
+            var wThL   = BodyAnchorTable.Get(BoneIndex.ThighL,      facing);
+            var wThR   = BodyAnchorTable.Get(BoneIndex.ThighR,      facing);
 
-            var butt  = (Bones[BoneIndex.ButtL].Position  + Bones[BoneIndex.ButtR].Position)  * 0.5f;
-            var belly = Bones[BoneIndex.BellyCenter].Position;
-            var thigh = (Bones[BoneIndex.ThighL].Position + Bones[BoneIndex.ThighR].Position) * 0.5f;
+            // Each breast sub-bone contribution: Upper 10%, Centre 35%, Lower 25%.
+            // Visibility weight scales the whole contribution so hidden bones don't drive the offset.
+            var upperContrib = (Bones[BoneIndex.BreastUpperL].Position * wBuL
+                              + Bones[BoneIndex.BreastUpperR].Position * wBuR) * 0.5f * 0.10f;
+            var centreContrib = (Bones[BoneIndex.BreastL].Position * wBcL
+                               + Bones[BoneIndex.BreastR].Position * wBcR) * 0.5f * 0.35f;
+            var lowerContrib  = (Bones[BoneIndex.BreastLowerL].Position * wBlL
+                               + Bones[BoneIndex.BreastLowerR].Position * wBlR) * 0.5f * 0.25f;
+            var breastBlend = upperContrib + centreContrib + lowerContrib;  // up to 0.70 total
 
-            // Weighted blend: breast chain 70%, butt 18%, belly 8%, thighs 4%
+            var butt  = (Bones[BoneIndex.ButtL].Position  * wButtL
+                       + Bones[BoneIndex.ButtR].Position  * wButtR) * 0.5f;
+            var belly = Bones[BoneIndex.BellyCenter].Position * wBelly;
+            var thigh = (Bones[BoneIndex.ThighL].Position * wThL
+                       + Bones[BoneIndex.ThighR].Position * wThR) * 0.5f;
+
             return breastBlend + butt * 0.18f + belly * 0.08f + thigh * 0.04f;
         }
         else if (profile == BodyProfileType.Masculine)
         {
+            var wButtL = BodyAnchorTable.Get(BoneIndex.MButtL,     facing);
+            var wButtR = BodyAnchorTable.Get(BoneIndex.MButtR,     facing);
+            var wBelly = BodyAnchorTable.Get(BoneIndex.BellyCenter, facing);
+            var wThL   = BodyAnchorTable.Get(BoneIndex.ThighL,     facing);
+            var wThR   = BodyAnchorTable.Get(BoneIndex.ThighR,     facing);
+
             var groin = Bones[BoneIndex.Groin].Position;
-            var butt  = (Bones[BoneIndex.MButtL].Position + Bones[BoneIndex.MButtR].Position) * 0.5f;
-            var belly = Bones[BoneIndex.BellyCenter].Position;
-            var thigh = (Bones[BoneIndex.ThighL].Position + Bones[BoneIndex.ThighR].Position) * 0.5f;
+            var butt  = (Bones[BoneIndex.MButtL].Position * wButtL + Bones[BoneIndex.MButtR].Position * wButtR) * 0.5f;
+            var belly = Bones[BoneIndex.BellyCenter].Position * wBelly;
+            var thigh = (Bones[BoneIndex.ThighL].Position * wThL   + Bones[BoneIndex.ThighR].Position * wThR) * 0.5f;
 
             return groin * 0.35f + butt * 0.35f + belly * 0.20f + thigh * 0.10f;
         }
         else
         {
-            // Androgynous: average of all
+            // Androgynous: visibility-weighted average of all bones.
             var sum = Vector2.Zero;
+            var totalW = 0f;
             for (int i = 0; i < BoneIndex.BoneCount; i++)
             {
-                sum += Bones[i].Position;
+                var w = BodyAnchorTable.Get(i, facing);
+                sum    += Bones[i].Position * w;
+                totalW += w;
             }
 
-            return sum / BoneIndex.BoneCount;
+            return totalW > 0f ? sum / totalW : Vector2.Zero;
         }
     }
 
