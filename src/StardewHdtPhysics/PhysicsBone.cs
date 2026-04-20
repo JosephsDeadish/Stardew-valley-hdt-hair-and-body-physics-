@@ -770,20 +770,28 @@ public sealed class HairChain
         // Segment 0: full external force, anchored spring (pulls to world origin)
         segments[0].Step(rootExternalForce, stiffness, damping);
 
-        // Each subsequent segment: receives attenuated force + spring toward parent
-        var attenuation = 0.70f;  // each segment gets 70% of parent's external force
-        var parentInfluence = 0.25f; // how strongly each segment is pulled toward parent
+        // Each subsequent segment: receives attenuated force + spring toward parent.
+        // Per-spec chain rules:
+        //   • stiffness compounds softer toward tip  (root stiffer, tip most elastic)
+        //   • damping compounds slightly higher toward tip  (tip stability, less buzz)
+        //   • force attenuates 70% per step so tips don't get full-body energy
+        const float Attenuation    = 0.70f;
+        const float ParentInfluence = 0.25f;
 
         var force = rootExternalForce;
+        var s     = stiffness;
+        var d     = damping;
         for (int i = 1; i < segmentCount; i++)
         {
-            force *= attenuation;
+            force *= Attenuation;
+            s     *= 0.88f;  // progressively softer: seg1≈0.88k, seg2≈0.77k, seg3≈0.68k …
+            d     *= 1.04f;  // progressively more damped (slight tip stability, per spec)
 
             // Chain constraint: spring pull toward parent's position
-            var toParent = segments[i - 1].Position - segments[i].Position;
-            var chainForce = toParent * parentInfluence;
+            var toParent  = segments[i - 1].Position - segments[i].Position;
+            var chainForce = toParent * ParentInfluence;
 
-            segments[i].Step(force + chainForce, stiffness * 0.80f, damping * 0.90f);
+            segments[i].Step(force + chainForce, s, d);
         }
     }
 
@@ -906,9 +914,11 @@ public sealed class WingChain
                 force += toParent * ChainInfluence[i];
             }
 
-            // Wing tip is the most elastic — slightly softer spring
+            // Wing tip is the most elastic — slightly softer spring.
+            // Stiffness decreases toward tip (elastic, floppy wing tip).
+            // Damping increases slightly toward tip (per-spec stability: less tip buzz).
             var s = stiffness * (1f - i * 0.06f);  // root=s, tip=s*0.82
-            var d = damping  * (1f - i * 0.03f);   // root=d, tip=d*0.91
+            var d = damping  * (1f + i * 0.03f);   // root=d, tip=d*1.09 (slightly more settled)
 
             segments[i].Step(force, Math.Max(0.01f, s), Math.Max(0.01f, d));
         }
@@ -1028,17 +1038,22 @@ public sealed class FurChain
 
     public void Step(Vector2 baseForce, float stiffness, float damping)
     {
-        const float Attenuation   = 0.80f;
+        const float Attenuation    = 0.80f;
         const float ChainInfluence = 0.40f;
 
         segments[0].Step(baseForce, stiffness, damping);
 
+        // Per-spec: root stiffest → tip progressively softer; damping increases toward tip.
         var force = baseForce;
+        var s     = stiffness;
+        var d     = damping;
         for (int i = 1; i < segmentCount; i++)
         {
             force *= Attenuation;
+            s     *= 0.88f;  // progressively softer toward tip
+            d     *= 1.04f;  // slightly more damped toward tip (stability)
             var toParent = segments[i - 1].Position - segments[i].Position;
-            segments[i].Step(force + toParent * ChainInfluence, stiffness * 0.85f, damping * 0.88f);
+            segments[i].Step(force + toParent * ChainInfluence, s, d);
         }
     }
 
@@ -1117,10 +1132,11 @@ public sealed class TailChain
         {
             force *= Attenuation;
             var toParent = segments[i - 1].Position - segments[i].Position;
-            // Tail tip softens progressively
-            var s = stiffness * (1f - i * 0.08f);
-            var d = damping   * (1f - i * 0.05f);
-            segments[i].Step(force + toParent * ChainInfluence, Math.Max(0.02f, s), Math.Max(0.02f, d));
+            // Tail tip softens progressively; damping increases toward tip per spec
+            // (prevents tip buzz while keeping the heavier root snappy).
+            var s = stiffness * (1f - i * 0.08f);         // root=s, i=1:0.92s, i=2:0.84s …
+            var d = damping   * (1f + i * 0.04f);         // root=d, i=1:1.04d, i=2:1.08d …
+            segments[i].Step(force + toParent * ChainInfluence, Math.Max(0.02f, s), d);
         }
     }
 
