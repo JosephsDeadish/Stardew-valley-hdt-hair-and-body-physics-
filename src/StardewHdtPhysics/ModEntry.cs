@@ -2670,8 +2670,10 @@ public sealed class ModEntry : Mod
 
         // Base inertia lag: body resists direction change (mass effect).
         // Uses the average of both region mults — a neutral whole-body inertia effect.
+        // Coefficients are in spring-unit space: velocity is ~2-5 px/tick, so keep multiplier
+        // very small (0.001-0.003) so the accumulated steady-state stays below ~0.03 units.
         var inertiaClothingMult = (breastMult + lowerBodyMult) * 0.5f;
-        impulse += new Vector2(-velocity.X, -velocity.Y) * ((0.03f + (baseStrength * 0.04f)) * inertiaClothingMult);
+        impulse += new Vector2(-velocity.X, -velocity.Y) * ((0.001f + (baseStrength * 0.002f)) * inertiaClothingMult);
 
         // ── Directional body physics ──────────────────────────────────────────
         // Each facing direction produces a distinct jiggle signature for breast/butt/groin.
@@ -2692,54 +2694,54 @@ public sealed class ModEntry : Mod
                     case 0: // North — walking up/away: breasts sway outward to sides, inward snap
                         // Lateral outward sweep: each step pushes breasts to sides then they snap back
                         impulse += new Vector2(
-                            (Game1.random.NextSingle() - 0.5f) * 2f * bStr * 0.075f,  // large lateral
-                            (Game1.random.NextSingle() - 0.5f)       * bStr * 0.025f); // tiny Y jiggle
+                            (Game1.random.NextSingle() - 0.5f) * 2f * bStr * 0.005f,  // gentle lateral
+                            (Game1.random.NextSingle() - 0.5f)       * bStr * 0.002f); // tiny Y jiggle
                         // Periodic outward snap at step cadence
                         if (Game1.ticks % 14 == key % 14)
                         {
                             var sign = ((Game1.ticks / 14) % 2 == 0) ? 1f : -1f;
-                            impulse += new Vector2(sign * bStr * 0.06f * speed, 0f);
+                            impulse += new Vector2(sign * bStr * 0.004f, 0f);
                         }
                         // Butt also prominent facing north (back of character visible)
                         impulse += new Vector2(
-                            (Game1.random.NextSingle() - 0.5f) * buStr * 0.04f,
-                            Math.Abs(velocity.Y) * buStr * 1.6f); // strong up-down butt jiggle
+                            (Game1.random.NextSingle() - 0.5f) * buStr * 0.003f,
+                            Math.Abs(velocity.Y) * buStr * 0.010f); // up-down butt jiggle
                         break;
 
                     case 2: // South — walking toward camera: breasts bounce up-down, outward-inward
-                        // Strong vertical jello bounce: up on foot-down, outward flare, then spring back
+                        // Vertical jello bounce: up on foot-down, outward flare, then spring back
                         impulse += new Vector2(
-                            (Game1.random.NextSingle() - 0.5f) * bStr * 0.06f,   // slight lateral outward
-                            -Math.Abs(velocity.Y) * bStr * 0.14f);               // strong upward on step
+                            (Game1.random.NextSingle() - 0.5f) * bStr * 0.004f,   // slight lateral outward
+                            -Math.Abs(velocity.Y) * bStr * 0.009f);               // upward on step
                         // Jello outward flare at step rhythm
                         if (Game1.ticks % 14 == key % 14)
                         {
                             impulse += new Vector2(
-                                (Game1.random.NextSingle() - 0.5f) * bStr * 0.08f,  // outward flare
-                                bStr * 0.05f * speed);  // downward settle
+                                (Game1.random.NextSingle() - 0.5f) * bStr * 0.005f,  // outward flare
+                                bStr * 0.004f);  // downward settle
                         }
                         // Belly bounce toward camera — shirt-covered, use breastMult (not lowerBodyMult)
                         impulse += new Vector2(
-                            (Game1.random.NextSingle() - 0.5f) * this.config.FemaleBellyStrength * breastMult * 0.04f,
-                            -Math.Abs(velocity.Y) * this.config.FemaleBellyStrength * breastMult * 0.06f);
+                            (Game1.random.NextSingle() - 0.5f) * this.config.FemaleBellyStrength * breastMult * 0.003f,
+                            -Math.Abs(velocity.Y) * this.config.FemaleBellyStrength * breastMult * 0.005f);
                         // Thigh jiggle
-                        impulse += new Vector2(0f, Math.Abs(velocity.Y) * thStr * 0.04f);
+                        impulse += new Vector2(0f, Math.Abs(velocity.Y) * thStr * 0.003f);
                         break;
 
                     case 1: // East — walking right: breasts mostly up-down with slight outward-inward
                     case 3: // West — walking left
                         // Primary up-down jello bounce (visible profile)
                         impulse += new Vector2(
-                            (Game1.random.NextSingle() - 0.5f) * bStr * 0.025f,  // tiny lateral
-                            -Math.Abs(velocity.Y) * bStr * 0.12f);               // dominant up-down
+                            (Game1.random.NextSingle() - 0.5f) * bStr * 0.002f,  // tiny lateral
+                            -Math.Abs(velocity.Y) * bStr * 0.008f);              // dominant up-down
                         // Periodic outward-inward at step cadence
                         if (Game1.ticks % 12 == key % 12)
                         {
                             var lateral = (facing == 1 ? 1f : -1f);
-                            impulse += new Vector2(lateral * bStr * 0.03f * speed, bStr * 0.03f * speed);
+                            impulse += new Vector2(lateral * bStr * 0.002f, bStr * 0.002f);
                         }
                         // Thigh and butt jiggle (visible from side)
-                        impulse += new Vector2(0f, Math.Abs(velocity.X) * buStr * 0.05f);
+                        impulse += new Vector2(0f, Math.Abs(velocity.X) * buStr * 0.004f);
                         break;
                 }
 
@@ -2748,8 +2750,8 @@ public sealed class ModEntry : Mod
                 if (velocity.LengthSquared() > 0.05f)
                 {
                     impulse += new Vector2(
-                        (Game1.random.NextSingle() - 0.5f) * bStr * 0.022f,
-                        (Game1.random.NextSingle() - 0.5f) * bStr * 0.018f);
+                        (Game1.random.NextSingle() - 0.5f) * bStr * 0.002f,
+                        (Game1.random.NextSingle() - 0.5f) * bStr * 0.002f);
                 }
             }
             else if (profile == BodyProfileType.Masculine)
@@ -2765,26 +2767,26 @@ public sealed class ModEntry : Mod
                     case 0: // North: lateral sway from left-right foot alternation
                     case 2: // South: lateral sway
                         impulse += new Vector2(
-                            Math.Abs(velocity.X) * grStr * 0.045f * (((Game1.ticks / 10 + key) % 2 == 0) ? 1f : -1f),
-                            (Game1.random.NextSingle() - 0.5f) * grStr * 0.008f * speed);
+                            Math.Abs(velocity.X) * grStr * 0.003f * (((Game1.ticks / 10 + key) % 2 == 0) ? 1f : -1f),
+                            (Game1.random.NextSingle() - 0.5f) * grStr * 0.001f);
                         break;
 
                     case 1: // East: forward-back sway from step rhythm
                     case 3: // West
                         impulse += new Vector2(
-                            (Game1.random.NextSingle() - 0.5f) * grStr * 0.008f * speed,
-                            Math.Abs(velocity.Y) * grStr * 0.045f * (((Game1.ticks / 10 + key) % 2 == 0) ? 1f : -1f));
+                            (Game1.random.NextSingle() - 0.5f) * grStr * 0.001f,
+                            Math.Abs(velocity.Y) * grStr * 0.003f * (((Game1.ticks / 10 + key) % 2 == 0) ? 1f : -1f));
                         break;
                 }
 
                 // Butt bounce for masculine (all directions)
-                impulse += new Vector2(0f, speed * buStr * 0.04f);
+                impulse += new Vector2(0f, speed * buStr * 0.003f);
             }
             else // Androgynous
             {
                 impulse += new Vector2(
-                    (Game1.random.NextSingle() - 0.5f) * baseStrength * 0.02f,
-                    (Game1.random.NextSingle() - 0.5f) * baseStrength * 0.02f);
+                    (Game1.random.NextSingle() - 0.5f) * baseStrength * 0.001f,
+                    (Game1.random.NextSingle() - 0.5f) * baseStrength * 0.001f);
             }
         }
 
@@ -2793,7 +2795,7 @@ public sealed class ModEntry : Mod
         // random jitter that can look like gyration or circular motion.
         if (baseStrength > 0f && velocity.LengthSquared() > 0.02f)
         {
-            var microScale = profile == BodyProfileType.Feminine ? 0.010f : 0.006f;
+            var microScale = 0.001f; // same for both profiles — micro-motion is symmetric
             impulse += new Vector2(
                 (Game1.random.NextSingle() - 0.5f) * microScale * baseStrength,
                 (Game1.random.NextSingle() - 0.5f) * microScale * 0.75f * baseStrength);
@@ -2802,7 +2804,7 @@ public sealed class ModEntry : Mod
         // Swimming: water resistance — stronger movement wave but rapid oscillations are damped
         if (character is Farmer swimmingFarmer && swimmingFarmer.swimming.Value)
         {
-            impulse += new Vector2(-velocity.X, -velocity.Y) * (0.05f + baseStrength * 0.06f);
+            impulse += new Vector2(-velocity.X, -velocity.Y) * (0.003f + baseStrength * 0.004f);
             impulse *= 0.82f;
             this.bodyImpulse[key] = impulse;
             // Also drive spring bones (water still moves body parts around)
