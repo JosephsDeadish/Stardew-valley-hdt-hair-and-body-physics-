@@ -6521,7 +6521,17 @@ public sealed class ModEntry : Mod
 
     private void RegisterConfigMenu()
     {
-        var api = this.Helper.ModRegistry.GetApi<IGenericModConfigMenuApi>("spacechase0.GenericModConfigMenu");
+        IGenericModConfigMenuApi? api;
+        try
+        {
+            api = this.Helper.ModRegistry.GetApi<IGenericModConfigMenuApi>("spacechase0.GenericModConfigMenu");
+        }
+        catch (Exception ex)
+        {
+            this.Monitor.Log($"Could not load Generic Mod Config Menu API (config menu will be unavailable): {ex.Message}", LogLevel.Warn);
+            return;
+        }
+
         if (api is null)
         {
             return;
@@ -6644,14 +6654,15 @@ public sealed class ModEntry : Mod
 
         // ── Quick presets ─────────────────────────────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "Quick Presets");
-        api.AddParagraph(this.ModManifest, () => "Presets set all physics strengths at once. Options: Soft, Default, High, ExtraBouncy.");
-        api.AddTextOption(
-            this.ModManifest,
-            () => this.config.Preset,
-            value => { this.config.Preset = value; this.ApplyPresetIfMatched(); },
-            () => "Preset",
-            () => "Instantly applies a full set of physics strength values.",
-            allowedValues: this.presets.Count > 0 ? this.presets.Select(p => p.Name).ToArray() : new[] { "Default" });
+        api.AddParagraph(this.ModManifest, () =>
+        {
+            var presetNames = this.presets.Count > 0
+                ? string.Join(", ", this.presets.Select(p => p.Name))
+                : "Soft, Default, High, ExtraBouncy";
+            return $"Presets set all physics strengths at once. To switch preset, edit 'Preset' in config.json " +
+                   $"(or use the 'svpp preset <name>' console command). Available presets: {presetNames}. " +
+                   $"Currently active: {this.config.Preset}.";
+        });
 
         // ── Spring-Damper Physics Engine ─────────────────────────────────────
         api.AddSectionTitle(this.ModManifest, () => "Spring Physics Engine");
